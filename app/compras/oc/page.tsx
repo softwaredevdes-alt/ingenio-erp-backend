@@ -3,7 +3,15 @@ import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 
-export type EstadoOC = 'pendiente' | 'enviada' | 'parcialmente_recibida' | 'recibida' | 'cancelada';
+export type EstadoOC =
+| 'borrador'
+| 'pendiente_aprobacion'
+| 'pendiente'
+| 'enviada'
+| 'parcialmente_recibida'
+| 'recibida'
+| 'cancelada'
+| 'anulada';
 
 export default function OrdenesCompraPage() {
     const [ordenes, setOrdenes] = useState<any[]>([]);
@@ -37,6 +45,7 @@ export default function OrdenesCompraPage() {
         observaciones: '',
     });
 
+    // Lista de obras únicas
     const obrasUnicas = useMemo(() => {
         const obrasSet = new Set<string>();
         ordenes.forEach((orden: any) => {
@@ -46,12 +55,62 @@ export default function OrdenesCompraPage() {
             return Array.from(obrasSet).sort();
     }, [ordenes]);
 
+    // Filtro de órdenes
+    const ordenesFiltradas = useMemo(() => {
+        return ordenes.filter((orden: any) => {
+            // Filtro por Estado
+            if (estadoFiltro !== 'todas') {
+                const estadoOrden = (orden.estado || '').toLowerCase().trim();
+                if (estadoFiltro === 'pendiente' && estadoOrden !== 'pendiente_aprobacion' && estadoOrden !== 'pendiente') return false;
+                if (estadoFiltro !== 'pendiente' && estadoOrden !== estadoFiltro) return false;
+            }
+
+            // Filtro por Obra
+            if (obraFiltro) {
+                const obraOrden = orden.solicitudes?.obras?.nombre;
+                if (obraOrden !== obraFiltro) return false;
+            }
+
+            // Filtro por texto
+            if (searchText.trim()) {
+                const texto = searchText.toLowerCase();
+                return (
+                    (orden.proveedor || '').toLowerCase().includes(texto) ||
+                    (orden.solicitudes?.insumo || '').toLowerCase().includes(texto)
+                );
+            }
+            return true;
+        });
+    }, [ordenes, estadoFiltro, obraFiltro, searchText]);
+
     const solicitudesDisponibles = useMemo(() => {
         if (!solicitudesAprobadas.length) return [];
-        const solicitudesConOrden = new Set(ordenes.map(oc => oc.solicitud_id));
-        return solicitudesAprobadas.filter((sol: any) => !solicitudesConOrden.has(sol.id));
+
+        // Calcular cantidad total ya ordenada por solicitud
+        const cantidadOrdenadaPorSolicitud = ordenes.reduce((acc: any, oc: any) => {
+            const sid = String(oc.solicitud_id);
+            // Usamos la cantidad de la solicitud asociada a la orden
+            const cantidadEnEstaOrden = Number(oc.solicitudes?.cantidad || 0);
+            acc[sid] = (acc[sid] || 0) + cantidadEnEstaOrden;
+            return acc;
+        }, {});
+
+        const disponibles = solicitudesAprobadas.filter((sol: any) => {
+            const sid = String(sol.id);
+            const cantidadSolicitada = Number(sol.cantidad || 0);
+            const cantidadYaOrdenada = Number(cantidadOrdenadaPorSolicitud[sid] || 0);
+
+            const cantidadDisponible = cantidadSolicitada - cantidadYaOrdenada;
+
+            return cantidadDisponible > 0; // Aún hay cantidad pendiente
+        });
+
+        console.log(`Solicitudes con cantidad física disponible: ${disponibles.length}`);
+        return disponibles;
     }, [solicitudesAprobadas, ordenes]);
 
+
+    {/*============ it's the old one
     const ordenesFiltradas = useMemo(() => {
         return ordenes.filter((orden: any) => {
             if (estadoFiltro !== 'todas' && orden.estado !== estadoFiltro) return false;
@@ -66,6 +125,7 @@ export default function OrdenesCompraPage() {
             return true;
         });
     }, [ordenes, estadoFiltro, obraFiltro, searchText]);
+    ======= */}
 
     const cargarOrdenes = async () => {
         setLoading(true);
@@ -98,6 +158,54 @@ export default function OrdenesCompraPage() {
         }
     };
 
+    {/* =============== Hide for a test
+        const cargarSolicitudesAprobadas = async () => {
+        try {
+            const { data, error } = await supabase
+            .from('solicitudes')
+            .select('id, insumo, obras(nombre)')
+            .eq('estado', 'aprobada')
+            .order('fecha_solicitud', { ascending: false });
+
+            if (error) throw error;
+            setSolicitudesAprobadas(data || []);
+        } catch (error) {
+            console.error('Error cargando solicitudes aprobadas:', error);
+            setSolicitudesAprobadas([]);
+        }
+    }; ========*/}
+
+    const cargarSolicitudesAprobadas = async () => {
+        console.log("🚀 Iniciando carga de solicitudes aprobadas...");
+
+        try {
+            const { data, error } = await supabase
+            .from('solicitudes')
+            .select(`
+            id,
+            insumo,
+            cantidad,
+            unidad,
+            estado,
+            obras (nombre)
+            `)
+            .eq('estado', 'aprobada')
+            .order('fecha_solicitud', { ascending: false });
+
+            if (error) {
+                console.error("❌ Error Supabase:", error);
+                alert("Error cargando solicitudes: " + error.message);
+                return;
+            }
+
+            console.log("✅ Solicitudes cargadas:", data?.length || 0, data);
+
+            setSolicitudesAprobadas(data || []);
+        } catch (err) {
+            console.error("❌ Error inesperado:", err);
+        }
+    };
+
     const calcularCantidadRecibida = async (ordenId: number): Promise<number> => {
         const { data } = await supabase
         .from('entradas_almacen')
@@ -107,6 +215,12 @@ export default function OrdenesCompraPage() {
     };
 
     const crearOActualizarOrden = async () => {
+        console.log("Intentando crear orden con datos:", nuevaOC);
+        if (!nuevaOC.proveedor || !nuevaOC.total) {
+            alert('Proveedor y Total son obligatorios');
+            return;
+        }
+
         if (!nuevaOC.solicitud_id || !nuevaOC.proveedor || !nuevaOC.total) {
             alert('Por favor completa los campos obligatorios');
             return;
@@ -143,27 +257,30 @@ export default function OrdenesCompraPage() {
 
             if (error) throw error;
 
-            alert(isEditing ? 'Orden actualizada' : `Orden creada correctamente - ${numeroOC}`);
+            console.log("Orden creada exitosamente");
+
+            alert(isEditing ? 'Orden actualizada correctamente' : `¡Orden creada exitosamente!\nNúmero: ${numeroOC}`);
             cerrarModal();
-            cargarOrdenes();
+            cargarOrdenes();           // Actualiza la tabla de órdenes
+            cargarSolicitudesAprobadas(); // Actualiza la lista de solicitudes disponibles en el modal
         } catch (error: any) {
             console.error(error);
             alert(`Error al guardar: ${error.message || error}`);
         }
     };
 
-    const editarOrden = (orden: any) => {
-        setNuevaOC({
-            id: orden.id,
-            solicitud_id: orden.solicitud_id.toString(),
-                   numero_oc: orden.numero_oc || '',
-                   proveedor: orden.proveedor,
-                   total: orden.total.toString(),
-                   observaciones: orden.observaciones || '',
-        });
-        setIsEditing(true);
-        setShowModal(true);
-    };
+const editarOrden = (orden: any) => {
+  setNuevaOC({
+    id: orden.id,
+    solicitud_id: orden.solicitud_id.toString(),
+    numero_oc: orden.numero_oc || '',
+    proveedor: orden.proveedor,
+    total: orden.total.toString(),
+    observaciones: orden.observaciones || '',
+  });
+  setIsEditing(true);
+  setShowModal(true);
+};
 
     const cerrarModal = () => {
         setShowModal(false);
@@ -196,19 +313,35 @@ export default function OrdenesCompraPage() {
 
             const registrarEntrada = async () => {
                 if (!nuevaEntrada.cantidad_recibida || !ordenSeleccionada) {
-                    alert("Faltan datos para registrar la entrada");
+                    alert("Faltan datos");
                     return;
                 }
 
+                const cantidadIngresada = Number(nuevaEntrada.cantidad_recibida);
+                const cantidadPendiente = ordenSeleccionada.cantidadFaltante || 0;
+
+                if (cantidadIngresada <= 0) {
+                    alert("La cantidad debe ser mayor a 0");
+                    return;
+                }
+
+                if (cantidadIngresada > cantidadPendiente) {
+                    const confirmacion = confirm(`La cantidad (${cantidadIngresada}) excede la pendiente (${cantidadPendiente}). ¿Deseas continuar?`);
+                    if (!confirmacion) {
+                        return;   // ← Esto debe detener todo
+                    }
+                }
+
+                // Si llega aquí, se guarda
                 try {
                     const { error } = await supabase.from('entradas_almacen').insert({
                         orden_compra_id: ordenSeleccionada.id,
-                        cantidad_recibida: Number(nuevaEntrada.cantidad_recibida),
-                                                                                     recibido_por: nuevaEntrada.recibido_por || null,
-                                                                                     observaciones: nuevaEntrada.observaciones || null,
-                                                                                     fecha_entrada: new Date().toISOString(),
+                        cantidad_recibida: cantidadIngresada,
+                        recibido_por: nuevaEntrada.recibido_por || null,
+                        observaciones: nuevaEntrada.observaciones || null,
+                        fecha_entrada: new Date().toISOString(),
                                                                                      unidad: ordenSeleccionada.solicitudes?.unidad || 'UND',
-                                                                                     insumo: ordenSeleccionada.solicitudes?.insumo,     // ← AÑADIDO
+                                                                                     insumo: ordenSeleccionada.solicitudes?.insumo,
                     });
 
                     if (error) throw error;
@@ -217,36 +350,43 @@ export default function OrdenesCompraPage() {
                     setShowEntradaModal(false);
                     setNuevaEntrada({ cantidad_recibida: '', recibido_por: '', observaciones: '' });
                     cargarOrdenes();
-                    verHistorialDeOrden(ordenSeleccionada); // refrescar historial
+                    verHistorialDeOrden(ordenSeleccionada);
                 } catch (error: any) {
                     console.error(error);
-                    alert('Error al registrar entrada:\n' + (error.message || error));
+                    alert('Error al registrar entrada');
                 }
             };
 
-                useEffect(() => { cargarOrdenes(); }, []);
-                useEffect(() => { cargarOrdenes(); }, [estadoFiltro, obraFiltro, searchText]);
+            // Carga inicial
+            useEffect(() => {
+                cargarOrdenes();
+            }, []);
 
-                const getEstadoColor = (estado: string) => {
-                    const est = (estado || '').toLowerCase().trim();
-                    switch (est) {
-                        case 'pendiente_aprobacion':
-                        case 'pendiente':
-                            return 'bg-yellow-100 text-yellow-700';
-                        case 'enviada': return 'bg-blue-100 text-blue-700';
-                        case 'parcialmente_recibida':
-                        case 'recibida_parcial':
-                            return 'bg-orange-100 text-orange-700';
-                        case 'recibida':
-                        case 'recibida_total':
-                            return 'bg-green-100 text-green-700';
-                        case 'cancelada':
-                        case 'anulada':
-                            return 'bg-red-100 text-red-700';
-                        default:
-                            return 'bg-gray-100 text-gray-700';
-                    }
-                };
+            // Refresca cuando cambian filtros
+            useEffect(() => {
+                cargarOrdenes();
+            }, [estadoFiltro, obraFiltro, searchText]);
+
+            // Carga solicitudes solo cuando se abre el modal
+            useEffect(() => {
+                if (showModal) {
+                    cargarSolicitudesAprobadas();
+                }
+            }, [showModal]);
+
+            const getEstadoColor = (estado: string) => {
+                const est = (estado || '').toLowerCase().trim();
+                switch (est) {
+                    case 'borrador': return 'bg-gray-100 text-gray-700';
+                    case 'pendiente_aprobacion':
+                    case 'pendiente': return 'bg-yellow-100 text-yellow-700';
+                    case 'enviada': return 'bg-blue-100 text-blue-700';
+                    case 'parcialmente_recibida': return 'bg-orange-100 text-orange-700';
+                    case 'recibida': return 'bg-green-100 text-green-700';
+                    case 'cancelada': return 'bg-red-100 text-red-700';
+                    default: return 'bg-gray-100 text-gray-700';
+                }
+            };
 
                 const generarPDF = (oc: any) => {
                     import('jspdf').then(({ jsPDF }) => {
@@ -334,7 +474,11 @@ export default function OrdenesCompraPage() {
                     <p className="text-gray-600 mt-1">Generar y gestionar Órdenes de Compra + PDF para Sigo</p>
                     </div>
                     <button
-                    onClick={() => { cargarSolicitudesAprobadas(); setShowModal(true); setIsEditing(false); }}
+                    onClick={() => {
+                        cargarSolicitudesAprobadas();
+                        setShowModal(true);
+                        setIsEditing(false);
+                    }}
                     className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-medium"
                     >
                     + Nueva Orden de Compra
@@ -460,118 +604,54 @@ export default function OrdenesCompraPage() {
 
                     {/* Hasta aqui... (filtros y tabla igual que tenías) ... */}
 
-                    {/* Modal Nueva / Editar Orden de Compra */}
+                    {/* =====  Modal de Nueva/Editar Orden  ===== */}
                     {showModal && (
                         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                        <div className="bg-white rounded-2xl p-8 w-full max-w-lg">
+                        <div className="bg-white rounded-2xl p-8 w-full max-w-md">
                         <h2 className="text-2xl font-bold mb-6">
                         {isEditing ? 'Editar Orden de Compra' : 'Nueva Orden de Compra'}
                         </h2>
 
                         <div className="space-y-5">
-                        {/* Selección de Solicitud */}
                         <div>
-                        <label className="block text-sm font-semibold mb-1">Solicitud Aprobada *</label>
-                        <select
-                        value={nuevaOC.solicitud_id}
-                        onChange={async (e) => {
-                            const solId = e.target.value;
-                            setNuevaOC(prev => ({ ...prev, solicitud_id: solId }));
-
-                            if (solId) {
-                                // Cargar cotización seleccionada
-                                const { data: cot } = await supabase
-                                .from('cotizaciones')
-                                .select('proveedor, precio_unitario')
-                                .eq('solicitud_id', Number(solId))
-                                .eq('estado', 'seleccionada')
-                                .single();
-
-                                if (cot) {
-                                    const { data: sol } = await supabase
-                                    .from('solicitudes')
-                                    .select('cantidad')
-                                    .eq('id', Number(solId))
-                                    .single();
-
-                                    const totalCalculado = cot.precio_unitario * (sol?.cantidad || 0);
-
-                                    setNuevaOC(prev => ({
-                                        ...prev,
-                                        proveedor: cot.proveedor,
-                                        total: totalCalculado.toString(),
-                                    }));
-                                }
-                            }
-                        }}
-                        className="w-full border rounded-xl p-3"
-                        disabled={isEditing}
-                        >
-                        <option value="">Selecciona una solicitud aprobada</option>
-                        {solicitudesDisponibles.map((sol: any) => (
-                            <option key={sol.id} value={sol.id}>
-                            {sol.obras?.nombre} - {sol.insumo}
-                            </option>
-                        ))}
-                        </select>
+                        <label className="block text-sm font-semibold mb-1">N° Orden</label>
+                        <input type="text" value={nuevaOC.numero_oc} readOnly className="w-full border rounded-xl p-3 bg-gray-100" />
                         </div>
 
-                        {/* Proveedor */}
                         <div>
                         <label className="block text-sm font-semibold mb-1">Proveedor</label>
                         <input
                         type="text"
                         value={nuevaOC.proveedor}
                         onChange={(e) => setNuevaOC(prev => ({ ...prev, proveedor: e.target.value }))}
-                        className="w-full border rounded-xl p-3 bg-gray-50"
-                        readOnly={isEditing}
+                        className="w-full border rounded-xl p-3"
                         />
                         </div>
 
-                        {/* Total */}
                         <div>
                         <label className="block text-sm font-semibold mb-1">Total (COP)</label>
                         <input
                         type="number"
                         value={nuevaOC.total}
                         onChange={(e) => setNuevaOC(prev => ({ ...prev, total: e.target.value }))}
-                        className="w-full border rounded-xl p-3 bg-gray-50"
-                        readOnly={isEditing}
+                        className="w-full border rounded-xl p-3"
                         />
                         </div>
 
-                        {/* Observaciones */}
                         <div>
                         <label className="block text-sm font-semibold mb-1">Observaciones</label>
                         <textarea
                         value={nuevaOC.observaciones}
                         onChange={(e) => setNuevaOC(prev => ({ ...prev, observaciones: e.target.value }))}
                         className="w-full border rounded-xl p-3 h-24"
-                        placeholder="Notas adicionales para el proveedor..."
                         />
                         </div>
                         </div>
 
                         <div className="flex gap-3 mt-8">
-                        <button
-                        onClick={cerrarModal}
-                        className="flex-1 py-3 border rounded-xl hover:bg-gray-50"
-                        >
-                        Cancelar
-                        </button>
-                        {/* ============== Boton Principal Nueva Orden? ====== */}
-                        {/* Tenia este onClick: onClick={crearOActualizarOrden}   =========== */}
-                        <button
-
-                        onClick={() => {
-                            cargarSolicitudesAprobadas();
-                            setShowModal(true);
-                            setIsEditing(false);
-                        }}
-
-                        className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-medium"
-                        >
-                        {isEditing ? 'Guardar Cambios' : 'Crear Orden de Compra'}
+                        <button onClick={cerrarModal} className="flex-1 py-3 border rounded-xl">Cancelar</button>
+                        <button onClick={crearOActualizarOrden} className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-medium">
+                        {isEditing ? 'Guardar Cambios' : 'Crear Orden'}
                         </button>
                         </div>
                         </div>

@@ -49,6 +49,7 @@ export default function CotizacionesPage() {
   const [nuevaCotizacion, setNuevaCotizacion] = useState({
     proveedor: '',
     precio_unitario: '',
+    cantidad: '',
     tiempo_entrega_dias: '',
     observaciones: '',
     creado_por: '',
@@ -133,10 +134,35 @@ export default function CotizacionesPage() {
     setCotizaciones(cotis);
   };
 
-  // === FUNCIONES DE COTIZACIONES ===
   const agregarCotizacion = async () => {
-    if (!selectedSolicitud || !nuevaCotizacion.proveedor || !nuevaCotizacion.precio_unitario) {
-      alert('Por favor completa proveedor y precio unitario');
+    if (!selectedSolicitud || !nuevaCotizacion.proveedor || !nuevaCotizacion.precio_unitario || !nuevaCotizacion.cantidad) {
+      alert('Por favor completa proveedor, precio unitario y cantidad');
+      return;
+    }
+
+    const cantidadNueva = Number(nuevaCotizacion.cantidad);
+
+    if (cantidadNueva <= 0) {
+      alert("La cantidad debe ser mayor a 0");
+      return;
+    }
+
+    if (!Number.isInteger(cantidadNueva)) {
+      alert("La cantidad debe ser un número entero");
+      return;
+    }
+
+    // Validación de cantidad total
+    const { data: cotizacionesExistentes } = await supabase
+    .from('cotizaciones')
+    .select('cantidad')
+    .eq('solicitud_id', selectedSolicitud.id);
+
+    const cantidadYaCotizada = cotizacionesExistentes?.reduce((sum, c) => sum + Number(c.cantidad || 0), 0) || 0;
+    const totalCotizado = cantidadYaCotizada + cantidadNueva;
+
+    if (totalCotizado > selectedSolicitud.cantidad) {
+      alert(`La cantidad total cotizada (${totalCotizado}) excede la cantidad solicitada (${selectedSolicitud.cantidad}).\nCantidad ya cotizada: ${cantidadYaCotizada}`);
       return;
     }
 
@@ -145,24 +171,28 @@ export default function CotizacionesPage() {
         solicitud_id: selectedSolicitud.id,
         proveedor: nuevaCotizacion.proveedor,
         precio_unitario: Number(nuevaCotizacion.precio_unitario),
-                                                                   cantidad: selectedSolicitud.cantidad,
-                                                                   unidad: selectedSolicitud.unidad,
-                                                                   tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
-                                                                   observaciones: nuevaCotizacion.observaciones || null,
-                                                                   creado_por: nuevaCotizacion.creado_por || null,
-                                                                   estado: 'pendiente',
+        cantidad: cantidadNueva,
+        unidad: selectedSolicitud.unidad,
+        tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
+        observaciones: nuevaCotizacion.observaciones || null,
+        creado_por: nuevaCotizacion.creado_por || null,
+        estado: 'pendiente',
       });
 
       if (error) throw error;
 
+      // Actualizar estado de la solicitud si es necesario
       await supabase.from('solicitudes').update({ estado: 'cotizada' }).eq('id', selectedSolicitud.id);
 
       alert('Cotización agregada correctamente');
       setShowAddModal(false);
-      setNuevaCotizacion({ proveedor: '', precio_unitario: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
+      setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
 
-      const cotis = await cargarCotizaciones(selectedSolicitud.id);
-      setCotizaciones(cotis);
+      // Recargar
+      if (selectedSolicitud) {
+        const cotis = await cargarCotizaciones(selectedSolicitud.id);
+        setCotizaciones(cotis);
+      }
       cargarSolicitudes();
     } catch (error) {
       console.error(error);
@@ -175,36 +205,70 @@ export default function CotizacionesPage() {
     setNuevaCotizacion({
       proveedor: cot.proveedor,
       precio_unitario: cot.precio_unitario.toString(),
-                       tiempo_entrega_dias: cot.tiempo_entrega_dias?.toString() || '',
-                       observaciones: cot.observaciones || '',
-                       creado_por: cot.creado_por || '',
+      cantidad: cot.cantidad.toString(),           // ← Asegúrate de esto
+      tiempo_entrega_dias: cot.tiempo_entrega_dias?.toString() || '',
+      observaciones: cot.observaciones || '',
+      creado_por: cot.creado_por || '',
     });
     setShowEditModal(true);
   };
 
   const guardarEdicion = async () => {
-    if (!editingCotizacion) return;
+    if (!editingCotizacion || !selectedSolicitud) return;
+
+    // Validación de cantidad total al editar
+    const cantidadNueva = Number(nuevaCotizacion.cantidad) || 0;
+    const cantidadAnterior = Number(editingCotizacion.cantidad) || 0;
+
+    if (cantidadNueva <= 0) {
+      alert("La cantidad debe ser mayor a 0");
+      return;
+    }
+
+    if (!Number.isInteger(cantidadNueva)) {
+      alert("La cantidad debe ser un número entero");
+      return;
+    }
+
+    // Calcular cantidad ya cotizada EXCLUYENDO la cotización actual
+    const { data: cotizacionesExistentes } = await supabase
+    .from('cotizaciones')
+    .select('id, cantidad')
+    .eq('solicitud_id', selectedSolicitud.id);
+
+    const cantidadYaCotizadaSinEsta = cotizacionesExistentes
+    ?.filter(c => String(c.id) !== String(editingCotizacion.id))  // Comparación segura
+    ?.reduce((sum, c) => sum + Number(c.cantidad || 0), 0) || 0;
+
+    const totalCotizado = cantidadYaCotizadaSinEsta + cantidadNueva;
+
+    if (totalCotizado > selectedSolicitud.cantidad) {
+      alert(`La cantidad total cotizada (${totalCotizado}) excede la cantidad solicitada (${selectedSolicitud.cantidad}).\nCantidad ya cotizada (sin esta): ${cantidadYaCotizadaSinEsta}`);
+      return;
+    }
 
     try {
       const { error } = await supabase.from('cotizaciones').update({
         proveedor: nuevaCotizacion.proveedor,
         precio_unitario: Number(nuevaCotizacion.precio_unitario),
-                                                                   tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
-                                                                   observaciones: nuevaCotizacion.observaciones || null,
-                                                                   creado_por: nuevaCotizacion.creado_por || null,
+        cantidad: cantidadNueva,
+        tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
+        observaciones: nuevaCotizacion.observaciones || null,
+        creado_por: nuevaCotizacion.creado_por || null,
       }).eq('id', editingCotizacion.id);
 
       if (error) throw error;
 
-      alert('Cotización actualizada');
+      alert('Cotización actualizada correctamente');
       setShowEditModal(false);
       setEditingCotizacion(null);
-      setNuevaCotizacion({ proveedor: '', precio_unitario: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
+      setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
 
       if (selectedSolicitud) {
         const cotis = await cargarCotizaciones(selectedSolicitud.id);
         setCotizaciones(cotis);
       }
+      cargarSolicitudes();
     } catch (error) {
       console.error(error);
       alert('Error al actualizar la cotización');
@@ -234,28 +298,39 @@ export default function CotizacionesPage() {
       return;
     }
 
-    if (!confirm(`¿Seleccionar esta cotización de ${cotizacion.proveedor} y crear la Orden de Compra?`)) {
+    // Verificar si ya existe una orden para esta solicitud
+    const { data: existingOC } = await supabase
+    .from('ordenes_compra')
+    .select('id')
+    .eq('solicitud_id', cotizacion.solicitud_id)
+    .single();
+
+    if (existingOC) {
+      alert("Esta solicitud ya tiene una Orden de Compra creada.");
+      return;
+    }
+
+    if (!confirm(`¿Seleccionar cotización de ${cotizacion.proveedor} y crear la Orden de Compra automáticamente?`)) {
       return;
     }
 
     try {
       // 1. Marcar cotización como seleccionada
-      const { error: updateError } = await supabase
+      await supabase
       .from('cotizaciones')
       .update({ estado: 'seleccionada' })
       .eq('id', cotizacion.id);
 
-      if (updateError) throw updateError;
-
-      // 2. Crear automáticamente la Orden de Compra
+      // 2. Obtener datos de la solicitud
       const { data: solicitud } = await supabase
       .from('solicitudes')
-      .select('cantidad, unidad')
+      .select('cantidad, unidad, insumo, obras(nombre)')
       .eq('id', cotizacion.solicitud_id)
       .single();
 
-      const total = cotizacion.precio_unitario * (solicitud?.cantidad || 0);
+      const total = Number(cotizacion.precio_unitario) * Number(solicitud?.cantidad || 0);
 
+      // 3. Generar número de OC
       const year = new Date().getFullYear();
       const { count } = await supabase
       .from('ordenes_compra')
@@ -264,6 +339,7 @@ export default function CotizacionesPage() {
 
       const numeroOC = `OC-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
 
+      // 4. Crear la Orden de Compra
       const { error: ocError } = await supabase.from('ordenes_compra').insert({
         solicitud_id: cotizacion.solicitud_id,
         numero_oc: numeroOC,
@@ -271,13 +347,15 @@ export default function CotizacionesPage() {
         total: total,
         estado: 'pendiente_aprobacion',
         fecha_emision: new Date().toISOString(),
-                                                                              observaciones: `Creado automáticamente desde cotización #${cotizacion.id}`,
+                                                                              observaciones: `Creada automáticamente desde cotización #${cotizacion.id}`,
       });
 
       if (ocError) throw ocError;
 
-      alert(`¡Orden de Compra creada correctamente!\nNúmero: ${numeroOC}`);
-      cargarCotizaciones(); // Recargar lista
+      alert(`¡Éxito!\nOrden de Compra creada: ${numeroOC}\nProveedor: ${cotizacion.proveedor}`);
+
+      // Recargar datos
+      cargarCotizaciones();
 
     } catch (error: any) {
       console.error(error);
@@ -398,7 +476,11 @@ export default function CotizacionesPage() {
         <h2 className="font-semibold">{selectedSolicitud.insumo}</h2>
         <p className="text-sm text-gray-500">{selectedSolicitud.obras?.nombre}</p>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
+        <button
+        onClick={() => {
+          setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
+          setShowAddModal(true);
+        }} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
         + Agregar Cotización
         </button>
         </div>
@@ -503,12 +585,38 @@ export default function CotizacionesPage() {
       <input type="text" value={nuevaCotizacion.proveedor} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, proveedor: e.target.value })} className="w-full border rounded-xl p-2.5" />
       </div>
       <div>
-      <label className="block text-sm font-semibold mb-1">Precio unitario *</label>
-      <input type="number" value={nuevaCotizacion.precio_unitario} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, precio_unitario: e.target.value })} className="w-full border rounded-xl p-2.5" />
+      <label className="block text-sm font-semibold mb-1">Precio unitario (COP) *</label>
+      <input
+      type="number"
+      step="0.01"
+      min="0.01"
+      value={nuevaCotizacion.precio_unitario}
+      onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, precio_unitario: e.target.value })}
+      className="w-full border rounded-xl p-2.5"
+      placeholder="0.00"
+      />
+      </div>
+      <div>
+      <label className="block text-sm font-semibold mb-1">Cantidad a cotizar</label>
+      <input
+      type="number"
+      min="1"
+      step="1"
+      value={nuevaCotizacion.cantidad}
+      onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, cantidad: e.target.value })}
+      className="w-full border rounded-xl p-2.5"
+      />
+      <p className="text-xs text-gray-500 mt-1">
+      Cantidad original solicitada: {selectedSolicitud?.cantidad} {selectedSolicitud?.unidad}
+      </p>
       </div>
       <div>
       <label className="block text-sm font-semibold mb-1">Tiempo de entrega (días)</label>
-      <input type="number" value={nuevaCotizacion.tiempo_entrega_dias} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, tiempo_entrega_dias: e.target.value })} className="w-full border rounded-xl p-2.5" />
+      <input
+      type="number"
+      min="1"
+      step="1"
+      value={nuevaCotizacion.tiempo_entrega_dias} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, tiempo_entrega_dias: e.target.value })} className="w-full border rounded-xl p-2.5" />
       </div>
       <div>
       <label className="block text-sm font-semibold mb-1">Creado por</label>
@@ -539,11 +647,29 @@ export default function CotizacionesPage() {
       </div>
       <div>
       <label className="block text-sm font-semibold mb-1">Precio unitario</label>
-      <input type="number" value={nuevaCotizacion.precio_unitario} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, precio_unitario: e.target.value })} className="w-full border rounded-xl p-2.5" />
+      <input type="number"
+      min="0.1"
+      step="0.1"
+      value={nuevaCotizacion.precio_unitario} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, precio_unitario: e.target.value })} className="w-full border rounded-xl p-2.5" />
+      </div>
+      <div>
+      <label className="block text-sm font-semibold mb-1">Cantidad a cotizar</label>
+      <input
+      type="number"
+      min="1"
+      step="1"
+      value={nuevaCotizacion.cantidad}
+      onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, cantidad: e.target.value })}
+      className="w-full border rounded-xl p-2.5"
+      />
       </div>
       <div>
       <label className="block text-sm font-semibold mb-1">Tiempo de entrega (días)</label>
-      <input type="number" value={nuevaCotizacion.tiempo_entrega_dias} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, tiempo_entrega_dias: e.target.value })} className="w-full border rounded-xl p-2.5" />
+      <input
+      type="number"
+      min="1"
+      step="1"
+      value={nuevaCotizacion.tiempo_entrega_dias} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, tiempo_entrega_dias: e.target.value })} className="w-full border rounded-xl p-2.5" />
       </div>
       <div>
       <label className="block text-sm font-semibold mb-1">Creado por</label>
