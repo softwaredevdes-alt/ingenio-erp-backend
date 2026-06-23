@@ -147,22 +147,8 @@ export default function CotizacionesPage() {
       return;
     }
 
-    if (!Number.isInteger(cantidadNueva)) {
-      alert("La cantidad debe ser un número entero");
-      return;
-    }
-
-    // Validación de cantidad total
-    const { data: cotizacionesExistentes } = await supabase
-    .from('cotizaciones')
-    .select('cantidad')
-    .eq('solicitud_id', selectedSolicitud.id);
-
-    const cantidadYaCotizada = cotizacionesExistentes?.reduce((sum, c) => sum + Number(c.cantidad || 0), 0) || 0;
-    const totalCotizado = cantidadYaCotizada + cantidadNueva;
-
-    if (totalCotizado > selectedSolicitud.cantidad) {
-      alert(`La cantidad total cotizada (${totalCotizado}) excede la cantidad solicitada (${selectedSolicitud.cantidad}).\nCantidad ya cotizada: ${cantidadYaCotizada}`);
+    if (cantidadNueva > selectedSolicitud.cantidad) {
+      alert(`La cantidad de la cotización (${cantidadNueva}) no puede superar la cantidad solicitada (${selectedSolicitud.cantidad}).`);
       return;
     }
 
@@ -171,24 +157,22 @@ export default function CotizacionesPage() {
         solicitud_id: selectedSolicitud.id,
         proveedor: nuevaCotizacion.proveedor,
         precio_unitario: Number(nuevaCotizacion.precio_unitario),
-        cantidad: cantidadNueva,
-        unidad: selectedSolicitud.unidad,
-        tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
-        observaciones: nuevaCotizacion.observaciones || null,
-        creado_por: nuevaCotizacion.creado_por || null,
-        estado: 'pendiente',
+                                                                   cantidad: cantidadNueva,
+                                                                   unidad: selectedSolicitud.unidad,
+                                                                   tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
+                                                                   observaciones: nuevaCotizacion.observaciones || null,
+                                                                   creado_por: nuevaCotizacion.creado_por || null,
+                                                                   estado: 'pendiente',
       });
 
       if (error) throw error;
 
-      // Actualizar estado de la solicitud si es necesario
       await supabase.from('solicitudes').update({ estado: 'cotizada' }).eq('id', selectedSolicitud.id);
 
       alert('Cotización agregada correctamente');
       setShowAddModal(false);
       setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
 
-      // Recargar
       if (selectedSolicitud) {
         const cotis = await cargarCotizaciones(selectedSolicitud.id);
         setCotizaciones(cotis);
@@ -216,34 +200,15 @@ export default function CotizacionesPage() {
   const guardarEdicion = async () => {
     if (!editingCotizacion || !selectedSolicitud) return;
 
-    // Validación de cantidad total al editar
     const cantidadNueva = Number(nuevaCotizacion.cantidad) || 0;
-    const cantidadAnterior = Number(editingCotizacion.cantidad) || 0;
 
     if (cantidadNueva <= 0) {
       alert("La cantidad debe ser mayor a 0");
       return;
     }
 
-    if (!Number.isInteger(cantidadNueva)) {
-      alert("La cantidad debe ser un número entero");
-      return;
-    }
-
-    // Calcular cantidad ya cotizada EXCLUYENDO la cotización actual
-    const { data: cotizacionesExistentes } = await supabase
-    .from('cotizaciones')
-    .select('id, cantidad')
-    .eq('solicitud_id', selectedSolicitud.id);
-
-    const cantidadYaCotizadaSinEsta = cotizacionesExistentes
-    ?.filter(c => String(c.id) !== String(editingCotizacion.id))  // Comparación segura
-    ?.reduce((sum, c) => sum + Number(c.cantidad || 0), 0) || 0;
-
-    const totalCotizado = cantidadYaCotizadaSinEsta + cantidadNueva;
-
-    if (totalCotizado > selectedSolicitud.cantidad) {
-      alert(`La cantidad total cotizada (${totalCotizado}) excede la cantidad solicitada (${selectedSolicitud.cantidad}).\nCantidad ya cotizada (sin esta): ${cantidadYaCotizadaSinEsta}`);
+    if (cantidadNueva > selectedSolicitud.cantidad) {
+      alert(`La cantidad de la cotización (${cantidadNueva}) no puede superar la cantidad solicitada (${selectedSolicitud.cantidad}).`);
       return;
     }
 
@@ -251,15 +216,16 @@ export default function CotizacionesPage() {
       const { error } = await supabase.from('cotizaciones').update({
         proveedor: nuevaCotizacion.proveedor,
         precio_unitario: Number(nuevaCotizacion.precio_unitario),
-        cantidad: cantidadNueva,
-        tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
-        observaciones: nuevaCotizacion.observaciones || null,
-        creado_por: nuevaCotizacion.creado_por || null,
+                                                                   cantidad: cantidadNueva,
+                                                                   tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
+                                                                   observaciones: nuevaCotizacion.observaciones || null,
+                                                                   creado_por: nuevaCotizacion.creado_por || null,
       }).eq('id', editingCotizacion.id);
 
       if (error) throw error;
 
       alert('Cotización actualizada correctamente');
+
       setShowEditModal(false);
       setEditingCotizacion(null);
       setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
@@ -276,11 +242,23 @@ export default function CotizacionesPage() {
   };
 
   const eliminarCotizacion = async (cot: Cotizacion) => {
-    if (!confirm(`¿Eliminar la cotización de "${cot.proveedor}"?`)) return;
+    const isSelected = cot.estado === 'seleccionada';
+
+    let mensaje = `¿Eliminar la cotización de "${cot.proveedor}"?`;
+    if (isSelected) {
+      mensaje = `⚠️ Esta cotización ya está SELECCIONADA y tiene una Orden de Compra asociada.\n\n¿Estás seguro de eliminarla? Esto puede afectar la Orden de Compra.`;
+      await supabase
+      .from('ordenes_compra')
+      .delete()
+      .eq('solicitud_id', cot.solicitud_id);
+    }
+
+    if (!confirm(mensaje)) return;
 
     try {
       await supabase.from('cotizaciones').delete().eq('id', cot.id);
       alert('Cotización eliminada');
+
       if (selectedSolicitud) {
         const cotis = await cargarCotizaciones(selectedSolicitud.id);
         setCotizaciones(cotis);
@@ -291,22 +269,31 @@ export default function CotizacionesPage() {
       alert('Error al eliminar la cotización');
     }
   };
-
   const seleccionarCotizacion = async (cotizacion: any) => {
     if (!cotizacion?.id || !cotizacion?.solicitud_id) {
       alert("Datos de cotización incompletos");
       return;
     }
 
-    // Verificar si ya existe una orden para esta solicitud
-    const { data: existingOC } = await supabase
-    .from('ordenes_compra')
-    .select('id')
-    .eq('solicitud_id', cotizacion.solicitud_id)
+    // Validación de cantidad total seleccionada
+    const { data: solicitud } = await supabase
+    .from('solicitudes')
+    .select('cantidad')
+    .eq('id', cotizacion.solicitud_id)
     .single();
 
-    if (existingOC) {
-      alert("Esta solicitud ya tiene una Orden de Compra creada.");
+    const { data: cotizacionesSeleccionadas } = await supabase
+    .from('cotizaciones')
+    .select('cantidad')
+    .eq('solicitud_id', cotizacion.solicitud_id)
+    .eq('estado', 'seleccionada');
+
+    const cantidadYaSeleccionada = cotizacionesSeleccionadas?.reduce((sum, c) => sum + Number(c.cantidad || 0), 0) || 0;
+    const cantidadNueva = Number(cotizacion.cantidad || 0);
+    const totalSeleccionado = cantidadYaSeleccionada + cantidadNueva;
+
+    if (totalSeleccionado > solicitud?.cantidad) {
+      alert(`La cantidad total seleccionada (${totalSeleccionado}) excede la cantidad solicitada (${solicitud?.cantidad}).`);
       return;
     }
 
@@ -315,51 +302,105 @@ export default function CotizacionesPage() {
     }
 
     try {
-      // 1. Marcar cotización como seleccionada
       await supabase
       .from('cotizaciones')
       .update({ estado: 'seleccionada' })
       .eq('id', cotizacion.id);
 
-      // 2. Obtener datos de la solicitud
       const { data: solicitud } = await supabase
       .from('solicitudes')
       .select('cantidad, unidad, insumo, obras(nombre)')
       .eq('id', cotizacion.solicitud_id)
       .single();
 
-      const total = Number(cotizacion.precio_unitario) * Number(solicitud?.cantidad || 0);
+      const cantidadUsada = Number(cotizacion.cantidad || solicitud?.cantidad || 0);
+      const total = Number(cotizacion.precio_unitario) * cantidadUsada;
 
-      // 3. Generar número de OC
-      const year = new Date().getFullYear();
-      const { count } = await supabase
-      .from('ordenes_compra')
-      .select('*', { count: 'exact', head: true })
-      .gte('fecha_emision', `${year}-01-01`);
+      const currentYear = new Date().getFullYear();
+      const timestamp = Date.now().toString().slice(-6);
+      const numeroOC = `OC-${currentYear}-${timestamp}`;
 
-      const numeroOC = `OC-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
-
-      // 4. Crear la Orden de Compra
       const { error: ocError } = await supabase.from('ordenes_compra').insert({
         solicitud_id: cotizacion.solicitud_id,
         numero_oc: numeroOC,
         proveedor: cotizacion.proveedor,
         total: total,
+        cotizacion_id: cotizacion.id,
         estado: 'pendiente_aprobacion',
         fecha_emision: new Date().toISOString(),
-                                                                              observaciones: `Creada automáticamente desde cotización #${cotizacion.id}`,
+        observaciones: `Creada automáticamente desde cotización #${cotizacion.id}`,
       });
 
       if (ocError) throw ocError;
 
       alert(`¡Éxito!\nOrden de Compra creada: ${numeroOC}\nProveedor: ${cotizacion.proveedor}`);
 
-      // Recargar datos
+      // Actualización inmediata del UI
+      setCotizaciones(prev => prev.map(c =>
+      c.id === cotizacion.id
+      ? { ...c, estado: 'seleccionada' }
+      : c
+      ));
+
       cargarCotizaciones();
 
     } catch (error: any) {
       console.error(error);
       alert('Error al crear la Orden de Compra:\n' + (error.message || error));
+    }
+  };
+
+  // Lógica para seleccionar varias parciales sin exceder total
+  const seleccionarTodasParciales = async () => {
+    if (!selectedSolicitud) return;
+
+    const { data: cotizacionesPendientes } = await supabase
+    .from('cotizaciones')
+    .select('*')
+    .eq('solicitud_id', selectedSolicitud.id)
+    .neq('estado', 'seleccionada');
+
+    if (!cotizacionesPendientes || cotizacionesPendientes.length === 0) {
+      alert("No hay cotizaciones pendientes para seleccionar.");
+      return;
+    }
+
+    // Calcular cantidad ya seleccionada
+    const { data: yaSeleccionadas } = await supabase
+    .from('cotizaciones')
+    .select('cantidad')
+    .eq('solicitud_id', selectedSolicitud.id)
+    .eq('estado', 'seleccionada');
+
+    let cantidadYaSeleccionada = yaSeleccionadas?.reduce((sum, c) => sum + Number(c.cantidad || 0), 0) || 0;
+
+    try {
+      let seleccionadas = 0;
+
+      for (const cot of cotizacionesPendientes) {
+        const cantidadNueva = Number(cot.cantidad || 0);
+        if (cantidadYaSeleccionada + cantidadNueva > selectedSolicitud.cantidad) {
+          console.log(`Cotización ${cot.id} excede límite, se omite.`);
+          continue;
+        }
+
+        await supabase
+        .from('cotizaciones')
+        .update({ estado: 'seleccionada' })
+        .eq('id', cot.id);
+
+        cantidadYaSeleccionada += cantidadNueva;
+        seleccionadas++;
+      }
+
+      alert(`Se seleccionaron ${seleccionadas} cotizaciones parciales.`);
+
+      const cotis = await cargarCotizaciones(selectedSolicitud.id);
+      setCotizaciones(cotis);
+      cargarSolicitudes();
+    } catch (error) {
+      console.error(error);
+      alert('Error al seleccionar cotizaciones');
     }
   };
 
@@ -475,6 +516,11 @@ export default function CotizacionesPage() {
         <div>
         <h2 className="font-semibold">{selectedSolicitud.insumo}</h2>
         <p className="text-sm text-gray-500">{selectedSolicitud.obras?.nombre}</p>
+        <p className="text-sm text-gray-500">
+        Cantidad solicitada: {selectedSolicitud.cantidad} {selectedSolicitud.unidad} |
+        Seleccionada: {cotizaciones.reduce((sum, c) => sum + (c.estado === 'seleccionada' ? Number(c.cantidad) : 0), 0)} |
+        Restante: {selectedSolicitud.cantidad - cotizaciones.reduce((sum, c) => sum + (c.estado === 'seleccionada' ? Number(c.cantidad) : 0), 0)} {selectedSolicitud.unidad}
+        </p>
         </div>
         <button
         onClick={() => {
@@ -482,6 +528,12 @@ export default function CotizacionesPage() {
           setShowAddModal(true);
         }} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
         + Agregar Cotización
+        </button>
+        <button
+        onClick={seleccionarTodasParciales}
+        className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-medium"
+        >
+        Seleccionar Todas Parciales
         </button>
         </div>
 
@@ -520,8 +572,8 @@ export default function CotizacionesPage() {
         ) : (
           <div className="space-y-3">
           {cotizaciones.map((cot) => {
-            const total = cot.precio_unitario * cot.cantidad;
             const isSelected = cot.estado === 'seleccionada';
+            const total = cot.precio_unitario * cot.cantidad;
 
           return (
             <div
@@ -548,18 +600,18 @@ export default function CotizacionesPage() {
           <p className="text-2xl font-bold text-gray-900">
           ${total.toLocaleString('es-CO')}
           </p>
-          {isSelected ? (
-            <span className="mt-2 inline-flex items-center px-3 py-1 text-sm font-semibold bg-green-600 text-white rounded-full">
-            ✓ Seleccionada
-            </span>
-          ) : (
-            <div className="flex gap-2 mt-2 justify-end">
-            <button onClick={() => seleccionarCotizacion(cot)} className="text-sm px-4 py-1.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium">Seleccionar</button>
-            <button onClick={() => abrirEditar(cot)} className="text-sm px-3 py-1.5 border rounded-xl hover:bg-gray-100">Editar</button>
-            <button onClick={() => eliminarCotizacion(cot)} className="text-sm px-3 py-1.5 text-red-600 hover:bg-red-50 rounded-xl">Eliminar</button>
-            </div>
-          )}
+
           </div>
+          </div>
+          <div className="flex gap-2 mt-2 justify-end">
+          {!isSelected && (
+            <button onClick={() => seleccionarCotizacion(cot)}
+            className="text-sm px-4 py-1.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium">Seleccionar</button>
+          )}
+          <button
+          onClick={() => abrirEditar(cot)} className="text-sm px-3 py-1.5 border rounded-xl hover:bg-gray-100">Editar</button>
+          <button
+          onClick={() => eliminarCotizacion(cot)} className="text-sm px-3 py-1.5 text-red-600 hover:bg-red-50 rounded-xl" >Eliminar</button>
           </div>
           {cot.observaciones && <p className="mt-3 text-sm text-gray-600 border-t pt-3">{cot.observaciones}</p>}
           </div>
@@ -681,8 +733,15 @@ export default function CotizacionesPage() {
       </div>
       </div>
       <div className="flex gap-3 mt-8">
-      <button onClick={() => { setShowEditModal(false); setEditingCotizacion(null); }} className="flex-1 py-3 rounded-xl border">Cancelar</button>
-      <button onClick={guardarEdicion} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-medium">Guardar Cambios</button>
+      <button
+      onClick={() => { setShowEditModal(false); setEditingCotizacion(null); }}
+      className="flex-1 py-3 rounded-xl border"
+      >
+      Cancelar
+      </button>
+      <button onClick={guardarEdicion} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-medium">
+      Guardar Cambios
+      </button>
       </div>
       </div>
       </div>

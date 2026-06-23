@@ -25,7 +25,6 @@ export default function OrdenesCompraPage() {
     const [showModal, setShowModal] = useState(false);
     const [showHistoryModal, setShowHistoryModal] = useState(false);
     const [showEntradaModal, setShowEntradaModal] = useState(false);
-    const [isEditing, setIsEditing] = useState(false);
 
     const [nuevaOC, setNuevaOC] = useState({
         id: null as number | null,
@@ -216,75 +215,59 @@ export default function OrdenesCompraPage() {
 
     const crearOActualizarOrden = async () => {
         console.log("Intentando crear orden con datos:", nuevaOC);
+
         if (!nuevaOC.proveedor || !nuevaOC.total) {
             alert('Proveedor y Total son obligatorios');
             return;
         }
 
-        if (!nuevaOC.solicitud_id || !nuevaOC.proveedor || !nuevaOC.total) {
-            alert('Por favor completa los campos obligatorios');
+        if (Number(nuevaOC.total) <= 0) {
+            alert('El Total debe ser mayor a 0');
+            return;
+        }
+
+        if (!nuevaOC.solicitud_id) {
+            alert('Debe seleccionar una solicitud');
             return;
         }
 
         try {
-            let numeroOC = nuevaOC.numero_oc;
-            if (!isEditing) {
-                const year = new Date().getFullYear();
-                const { count } = await supabase
-                .from('ordenes_compra')
-                .select('*', { count: 'exact', head: true })
-                .gte('fecha_emision', `${year}-01-01`);
+            const year = new Date().getFullYear();
+            const { count } = await supabase
+            .from('ordenes_compra')
+            .select('*', { count: 'exact', head: true })
+            .gte('fecha_emision', `${year}-01-01`);
 
-                numeroOC = `OC-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
-            }
+            const numeroOC = `OC-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
 
             const payload = {
                 solicitud_id: Number(nuevaOC.solicitud_id),
                 numero_oc: numeroOC,
                 proveedor: nuevaOC.proveedor,
                 total: Number(nuevaOC.total),
-                estado: 'pendiente_aprobacion',   // ← Cambiado aquí
+                estado: 'pendiente_aprobacion',
                 fecha_emision: new Date().toISOString(),
                 observaciones: nuevaOC.observaciones || null,
             };
 
-            let error;
-            if (isEditing && nuevaOC.id) {
-                ({ error } = await supabase.from('ordenes_compra').update(payload).eq('id', nuevaOC.id));
-            } else {
-                ({ error } = await supabase.from('ordenes_compra').insert(payload));
-            }
+            const { error } = await supabase.from('ordenes_compra').insert(payload);
 
             if (error) throw error;
 
             console.log("Orden creada exitosamente");
 
-            alert(isEditing ? 'Orden actualizada correctamente' : `¡Orden creada exitosamente!\nNúmero: ${numeroOC}`);
+            alert(`¡Orden creada exitosamente!\nNúmero: ${numeroOC}`);
             cerrarModal();
-            cargarOrdenes();           // Actualiza la tabla de órdenes
-            cargarSolicitudesAprobadas(); // Actualiza la lista de solicitudes disponibles en el modal
+            cargarOrdenes();
+            cargarSolicitudesAprobadas();
         } catch (error: any) {
             console.error(error);
             alert(`Error al guardar: ${error.message || error}`);
         }
     };
 
-const editarOrden = (orden: any) => {
-  setNuevaOC({
-    id: orden.id,
-    solicitud_id: orden.solicitud_id.toString(),
-    numero_oc: orden.numero_oc || '',
-    proveedor: orden.proveedor,
-    total: orden.total.toString(),
-    observaciones: orden.observaciones || '',
-  });
-  setIsEditing(true);
-  setShowModal(true);
-};
-
     const cerrarModal = () => {
         setShowModal(false);
-        setIsEditing(false);
         setNuevaOC({ id: null, solicitud_id: '', numero_oc: '', proveedor: '', total: '', observaciones: '' });
     };
 
@@ -328,11 +311,12 @@ const editarOrden = (orden: any) => {
                 if (cantidadIngresada > cantidadPendiente) {
                     const confirmacion = confirm(`La cantidad (${cantidadIngresada}) excede la pendiente (${cantidadPendiente}). ¿Deseas continuar?`);
                     if (!confirmacion) {
-                        return;   // ← Esto debe detener todo
+                        console.log("Usuario canceló la confirmación de cantidad excedida");
+                        return;
                     }
                 }
 
-                // Si llega aquí, se guarda
+                // Solo llega aquí si todo está OK o si el usuario aceptó el exceso
                 try {
                     const { error } = await supabase.from('entradas_almacen').insert({
                         orden_compra_id: ordenSeleccionada.id,
@@ -477,7 +461,6 @@ const editarOrden = (orden: any) => {
                     onClick={() => {
                         cargarSolicitudesAprobadas();
                         setShowModal(true);
-                        setIsEditing(false);
                     }}
                     className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-medium"
                     >
@@ -584,12 +567,6 @@ const editarOrden = (orden: any) => {
                                 {orden.estado !== 'cancelada' && orden.estado !== 'recibida' && (
                                     <button onClick={() => cancelarOrden(orden)} className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-700 text-white rounded-lg">Cancelar</button>
                                 )}
-                                <button
-                                onClick={() => editarOrden(orden)}
-                                className="px-3 py-1.5 text-xs bg-amber-600 hover:bg-amber-700 text-white rounded-lg"
-                                >
-                                ✏️ Editar
-                                </button>
                                 <button onClick={() => generarPDF(orden)} className="px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded-lg">📄 PDF</button>
                                 </div>
                                 </td>
@@ -608,10 +585,6 @@ const editarOrden = (orden: any) => {
                     {showModal && (
                         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
                         <div className="bg-white rounded-2xl p-8 w-full max-w-md">
-                        <h2 className="text-2xl font-bold mb-6">
-                        {isEditing ? 'Editar Orden de Compra' : 'Nueva Orden de Compra'}
-                        </h2>
-
                         <div className="space-y-5">
                         <div>
                         <label className="block text-sm font-semibold mb-1">N° Orden</label>
@@ -650,9 +623,6 @@ const editarOrden = (orden: any) => {
 
                         <div className="flex gap-3 mt-8">
                         <button onClick={cerrarModal} className="flex-1 py-3 border rounded-xl">Cancelar</button>
-                        <button onClick={crearOActualizarOrden} className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-medium">
-                        {isEditing ? 'Guardar Cambios' : 'Crear Orden'}
-                        </button>
                         </div>
                         </div>
                         </div>
