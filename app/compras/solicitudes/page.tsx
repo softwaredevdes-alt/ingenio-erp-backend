@@ -23,11 +23,23 @@ export default function SolicitudesPage() {
   const [obras, setObras] = useState<any[]>([]);
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedSolicitud, setSelectedSolicitud] = useState<Solicitud | null>(null);
 
   // Filtros
   const [selectedObraId, setSelectedObraId] = useState<string | null>(null);
   const [estadoFiltro, setEstadoFiltro] = useState<string>('todas');
   const [searchText, setSearchText] = useState('');
+  const [fechaInicio, setFechaInicio] = useState('');
+  const [fechaFin, setFechaFin] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [proveedorFiltro, setProveedorFiltro] = useState('');
+
+  // Debounce búsqueda
+  useEffect(() => {
+    const timer = setTimeout(() => setSearchTerm(searchInput), 400);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   // Modal crear
   const [showModal, setShowModal] = useState(false);
@@ -80,6 +92,15 @@ export default function SolicitudesPage() {
         );
       }
 
+      if (fechaInicio || fechaFin) {
+        filtered = filtered.filter((s: any) => {
+          const fecha = new Date(s.fecha_solicitud);
+          if (fechaInicio && fecha < new Date(fechaInicio)) return false;
+          if (fechaFin && fecha > new Date(fechaFin)) return false;
+          return true;
+        });
+      }
+
       setSolicitudes(datos);
     } catch (error) {
       console.error('Error cargando solicitudes:', error);
@@ -130,6 +151,25 @@ export default function SolicitudesPage() {
     }
   };
 
+  const rechazarSolicitud = async (id: number) => {
+    if (!confirm('¿Rechazar esta solicitud?')) return;
+
+    try {
+      const { error } = await supabase
+      .from('solicitudes')
+      .update({ estado: 'rechazada' })
+      .eq('id', id);
+
+      if (error) throw error;
+
+      alert('Solicitud rechazada');
+      cargarSolicitudes();
+    } catch (error) {
+      console.error(error);
+      alert('Error al rechazar la solicitud');
+    }
+  };
+
   const getEstadoColor = (estado: string) => {
     switch (estado) {
       case 'pendiente': return 'bg-yellow-100 text-yellow-700';
@@ -162,15 +202,28 @@ export default function SolicitudesPage() {
     </div>
 
     {/* Filtros */}
-    <div className="bg-white p-6 rounded-2xl shadow mb-8">
+    <div className="bg-white rounded-2xl shadow p-6 mb-6">
     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-    {/* Obra */}
     <div>
-    <label className="block text-sm font-semibold mb-2 text-gray-700">Obra</label>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
+    <select
+    value={estadoFiltro}
+    onChange={(e) => setEstadoFiltro(e.target.value)}
+    className="w-full border rounded-xl p-3"
+    >
+    <option value="todas">Todos</option>
+    <option value="pendiente">Pendiente</option>
+    <option value="aprobada">Aprobada</option>
+    <option value="rechazada">Rechazada</option>
+    </select>
+    </div>
+
+    <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Obra</label>
     <select
     value={selectedObraId || ''}
     onChange={(e) => setSelectedObraId(e.target.value || null)}
-    className="w-full border rounded-xl p-2.5"
+    className="w-full border rounded-xl p-3"
     >
     <option value="">Todas las obras</option>
     {obras.map((obra) => (
@@ -179,32 +232,65 @@ export default function SolicitudesPage() {
     </select>
     </div>
 
-    {/* Estado */}
-    <div>
-    <label className="block text-sm font-semibold mb-2 text-gray-700">Estado</label>
-    <select
-    value={estadoFiltro}
-    onChange={(e) => setEstadoFiltro(e.target.value)}
-    className="w-full border rounded-xl p-2.5"
+    <div className="flex items-end">
+    <button
+    onClick={() => {
+      setEstadoFiltro('todas');
+      setSelectedObraId(null);
+      setSearchInput('');
+      setSearchTerm('');
+      setProveedorFiltro('');
+      setFechaInicio('');
+      setFechaFin('');
+    }}
+    className="w-full px-6 py-3 text-sm border rounded-xl hover:bg-gray-100"
     >
-    <option value="todas">Todos</option>
-    <option value="pendiente">Pendiente</option>
-    <option value="cotizada">Cotizada</option>
-    <option value="aprobada">Aprobada</option>
-    <option value="rechazada">Rechazada</option>
-    </select>
+    Limpiar Filtros
+    </button>
     </div>
 
-    {/* Buscar */}
-    <div className="md:col-span-2">
-    <label className="block text-sm font-semibold mb-2 text-gray-700">Buscar</label>
+    <div className="md:col-span-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Insumo</label>
     <input
     type="text"
-    placeholder="Buscar por insumo, nota o creador..."
-    value={searchText}
-    onChange={(e) => setSearchText(e.target.value)}
-    className="w-full border rounded-xl p-2.5"
+    placeholder="Buscar por insumo..."
+    value={searchInput}
+    onChange={(e) => setSearchInput(e.target.value)}
+    className="w-full border rounded-xl p-3"
     />
+    </div>
+    <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Proveedor</label>
+    <input
+    type="text"
+    placeholder="Buscar proveedor..."
+    value={proveedorFiltro}
+    onChange={(e) => setProveedorFiltro(e.target.value)}
+    className="w-full border rounded-xl p-3"
+    />
+    </div>
+    </div>
+
+    <div className="md:col-span-4 grid grid-cols-2 gap-4">
+    <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Desde</label>
+    <input
+    type="date"
+    value={fechaInicio}
+    onChange={(e) => setFechaInicio(e.target.value)}
+    className="w-full border rounded-xl p-3"
+    />
+    </div>
+    <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
+    <input
+    type="date"
+    value={fechaFin}
+    onChange={(e) => setFechaFin(e.target.value)}
+    className="w-full border rounded-xl p-3"
+    />
+    </div>
     </div>
     </div>
     </div>
@@ -221,37 +307,56 @@ export default function SolicitudesPage() {
     ) : (
       <div className="bg-white rounded-2xl shadow overflow-hidden">
       <table className="w-full">
-      <thead className="bg-gray-50">
+      <thead className="bg-gray-50 border-b">
       <tr>
-      <th className="p-4 text-left font-semibold text-gray-700">Fecha</th>
-      <th className="p-4 text-left font-semibold text-gray-700">Obra</th>
-      <th className="p-4 text-left font-semibold text-gray-700">Insumo</th>
-      <th className="p-4 text-left font-semibold text-gray-700">Cantidad</th>
-      <th className="p-4 text-left font-semibold text-gray-700">Estado</th>
-      <th className="p-4 text-left font-semibold text-gray-700">Creado por</th>
+      <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Fecha</th>
+      <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Obra</th>
+      <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Insumo</th>
+      <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Cantidad</th>
+      <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Solicitado por</th>
+      <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Estado</th>
+      <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Acciones</th>
       </tr>
       </thead>
-      <tbody>
-      {solicitudes.map((s) => (
-        <tr key={s.id} className="border-t hover:bg-gray-50">
-        <td className="p-4 text-sm text-gray-600">
-        {new Date(s.fecha_solicitud).toLocaleDateString('es-CO')}
-        </td>
-        <td className="p-4 font-medium">{s.obras?.nombre || '—'}</td>
-        <td className="p-4">{s.insumo}</td>
-        <td className="p-4">
-        {s.cantidad} {s.unidad || ''}
-        </td>
-        <td className="p-4">
-        <span className={`px-3 py-1 rounded-full text-sm font-medium ${getEstadoColor(s.estado)}`}>
-        {s.estado}
-        </span>
-        </td>
-        <td className="p-4 text-sm text-gray-600">{s.solicitado_por || '—'}</td>
-        </tr>
-      ))}
+      <tbody className="divide-y">
+      {solicitudes.length === 0 ? (
+        <tr><td colSpan={7} className="px-6 py-8 text-center text-gray-500">No se encontraron solicitudes.</td></tr>
+      ) : (
+        solicitudes.map((sol) => (
+          <tr
+          key={sol.id}
+          onClick={() => abrirSolicitud(sol)}
+          className={`cursor-pointer hover:bg-gray-50 ${selectedSolicitud?.id === sol.id ? 'bg-blue-50' : ''}`}
+          >
+          <td className="px-6 py-4 text-sm text-gray-600">{new Date(sol.fecha_solicitud).toLocaleDateString('es-CO')}</td>
+          <td className="px-6 py-4 text-sm text-gray-800">{sol.obras?.nombre || '—'}</td>
+          <td className="px-6 py-4 text-sm text-gray-800">{sol.insumo}</td>
+          <td className="px-6 py-4 text-sm text-center text-gray-700">{sol.cantidad} {sol.unidad}</td>
+          <td className="px-6 py-4 text-sm text-gray-600">{sol.solicitado_por || '—'}</td>
+          <td className="px-6 py-4 text-center">
+          <span className={`px-3 py-1 rounded-full text-xs font-medium ${sol.estado === 'aprobada' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+          {sol.estado}
+          </span>
+          </td>
+          <td className="px-6 py-4 text-center">
+          <div className="flex justify-center gap-2">
+          <button
+          onClick={(e) => {
+            e.stopPropagation();
+            rechazarSolicitud(sol.id);
+          }}
+          className="text-xs px-3 py-1 text-red-600 hover:bg-red-50 rounded-xl"
+          >
+          Rechazar
+          </button>
+          </div>
+          </td>
+          </tr>
+        ))
+      )}
       </tbody>
       </table>
+
       </div>
     )}
 
