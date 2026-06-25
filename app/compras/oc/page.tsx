@@ -26,6 +26,12 @@ export default function OrdenesCompraPage() {
     const [showHistoryModal, setShowHistoryModal] = useState(false);
     const [showEntradaModal, setShowEntradaModal] = useState(false);
 
+    const [proveedorFiltro, setProveedorFiltro] = useState('');
+    const [fechaInicio, setFechaInicio] = useState('');
+    const [fechaFin, setFechaFin] = useState('');
+
+    const [numeroOcFiltro, setNumeroOcFiltro] = useState('');
+
     const [nuevaOC, setNuevaOC] = useState({
         id: null as number | null,
         solicitud_id: '',
@@ -60,8 +66,18 @@ export default function OrdenesCompraPage() {
             // Filtro por Estado
             if (estadoFiltro !== 'todas') {
                 const estadoOrden = (orden.estado || '').toLowerCase().trim();
-                if (estadoFiltro === 'pendiente' && estadoOrden !== 'pendiente_aprobacion' && estadoOrden !== 'pendiente') return false;
-                if (estadoFiltro !== 'pendiente' && estadoOrden !== estadoFiltro) return false;
+                const recibido = orden.cantidadRecibida || 0;
+                const original = orden.cantidad || orden.solicitudes?.cantidad || 0;
+
+                if (estadoFiltro === 'pendiente') {
+                    if (estadoOrden !== 'pendiente_aprobacion' && estadoOrden !== 'pendiente') return false;
+                } else if (estadoFiltro === 'parcialmente_recibida') {
+                    if (recibido === 0 || recibido >= original) return false;
+                } else if (estadoFiltro === 'recibida') {
+                    if (recibido < original) return false;
+                } else if (estadoOrden !== estadoFiltro) {
+                    return false;
+                }
             }
 
             // Filtro por Obra
@@ -70,17 +86,35 @@ export default function OrdenesCompraPage() {
                 if (obraOrden !== obraFiltro) return false;
             }
 
-            // Filtro por texto
+            // Filtro por Proveedor
+            if (proveedorFiltro) {
+                if (!orden.proveedor?.toLowerCase().includes(proveedorFiltro.toLowerCase())) return false;
+            }
+
+            // Filtro por Fecha
+            if (fechaInicio || fechaFin) {
+                const fechaOrden = new Date(orden.fecha_emision);
+                if (fechaInicio && fechaOrden < new Date(fechaInicio)) return false;
+                if (fechaFin && fechaOrden > new Date(fechaFin)) return false;
+            }
+
+            // Filtro por Número de Orden
             if (searchText.trim()) {
                 const texto = searchText.toLowerCase();
                 return (
+                    (orden.numero_oc || '').toLowerCase().includes(texto) ||
                     (orden.proveedor || '').toLowerCase().includes(texto) ||
                     (orden.solicitudes?.insumo || '').toLowerCase().includes(texto)
                 );
             }
+
+            // Filtro por Número de Orden
+            if (numeroOcFiltro.trim()) {
+                if (!orden.numero_oc?.toLowerCase().includes(numeroOcFiltro.toLowerCase())) return false;
+            }
             return true;
         });
-    }, [ordenes, estadoFiltro, obraFiltro, searchText]);
+    }, [ordenes, estadoFiltro, obraFiltro, proveedorFiltro, fechaInicio, fechaFin, searchText]);
 
     const solicitudesDisponibles = useMemo(() => {
         if (!solicitudesAprobadas.length) return [];
@@ -142,7 +176,7 @@ export default function OrdenesCompraPage() {
             const ordenesConProgreso = await Promise.all(
                 (ordenesData || []).map(async (orden: any) => {
                     const cantidadRecibida = await calcularCantidadRecibida(orden.id);
-                    const cantidadOriginal = orden.solicitudes?.cantidad || 0;
+                    const cantidadOriginal = orden.cantidad || orden.solicitudes?.cantidad || 0;  // ← Usa cantidad de la OC primero
                     const cantidadFaltante = Math.max(0, cantidadOriginal - cantidadRecibida);
                     const porcentajeRecibido = cantidadOriginal > 0 ? Math.round((cantidadRecibida / cantidadOriginal) * 100) : 0;
                     return { ...orden, cantidadRecibida, cantidadFaltante, porcentajeRecibido };
@@ -213,64 +247,6 @@ export default function OrdenesCompraPage() {
         return data?.reduce((sum, e) => sum + (e.cantidad_recibida || 0), 0) || 0;
     };
 
-    const crearOActualizarOrden = async () => {
-        console.log("Intentando crear orden con datos:", nuevaOC);
-
-        if (!nuevaOC.proveedor || !nuevaOC.total) {
-            alert('Proveedor y Total son obligatorios');
-            return;
-        }
-
-        if (Number(nuevaOC.total) <= 0) {
-            alert('El Total debe ser mayor a 0');
-            return;
-        }
-
-        if (!nuevaOC.solicitud_id) {
-            alert('Debe seleccionar una solicitud');
-            return;
-        }
-
-        try {
-            const year = new Date().getFullYear();
-            const { count } = await supabase
-            .from('ordenes_compra')
-            .select('*', { count: 'exact', head: true })
-            .gte('fecha_emision', `${year}-01-01`);
-
-            const numeroOC = `OC-${year}-${String((count || 0) + 1).padStart(3, '0')}`;
-
-            const payload = {
-                solicitud_id: Number(nuevaOC.solicitud_id),
-                numero_oc: numeroOC,
-                proveedor: nuevaOC.proveedor,
-                total: Number(nuevaOC.total),
-                estado: 'pendiente_aprobacion',
-                fecha_emision: new Date().toISOString(),
-                observaciones: nuevaOC.observaciones || null,
-            };
-
-            const { error } = await supabase.from('ordenes_compra').insert(payload);
-
-            if (error) throw error;
-
-            console.log("Orden creada exitosamente");
-
-            alert(`¡Orden creada exitosamente!\nNúmero: ${numeroOC}`);
-            cerrarModal();
-            cargarOrdenes();
-            cargarSolicitudesAprobadas();
-        } catch (error: any) {
-            console.error(error);
-            alert(`Error al guardar: ${error.message || error}`);
-        }
-    };
-
-    const cerrarModal = () => {
-        setShowModal(false);
-        setNuevaOC({ id: null, solicitud_id: '', numero_oc: '', proveedor: '', total: '', observaciones: '' });
-    };
-
     const marcarComoEnviada = async (orden: any) => {
         if (!confirm(`¿Marcar la orden de "${orden.proveedor}" como ENVIADA?`)) return;
         const { error } = await supabase.from('ordenes_compra').update({ estado: 'enviada' }).eq('id', orden.id);
@@ -279,8 +255,21 @@ export default function OrdenesCompraPage() {
 
         const cancelarOrden = async (orden: any) => {
             if (!confirm(`¿Cancelar la orden de "${orden.proveedor}"?`)) return;
-            const { error } = await supabase.from('ordenes_compra').update({ estado: 'cancelada' }).eq('id', orden.id);
-            if (!error) cargarOrdenes();
+
+            try {
+                const { error } = await supabase
+                .from('ordenes_compra')
+                .update({ estado: 'anulada' })
+                .eq('id', orden.id);
+
+                if (error) throw error;
+
+                alert('Orden cancelada correctamente');
+                cargarOrdenes();
+            } catch (error: any) {
+                console.error("Error al cancelar:", error);
+                alert(`Error al cancelar la orden: ${error.message || error}`);
+            }
         };
 
             const verHistorialDeOrden = async (orden: any) => {
@@ -309,14 +298,10 @@ export default function OrdenesCompraPage() {
                 }
 
                 if (cantidadIngresada > cantidadPendiente) {
-                    const confirmacion = confirm(`La cantidad (${cantidadIngresada}) excede la pendiente (${cantidadPendiente}). ¿Deseas continuar?`);
-                    if (!confirmacion) {
-                        console.log("Usuario canceló la confirmación de cantidad excedida");
-                        return;
-                    }
+                    alert(`La cantidad (${cantidadIngresada}) excede la pendiente (${cantidadPendiente}). No se permite sobrepasar el total de la orden.`);
+                    return;
                 }
 
-                // Solo llega aquí si todo está OK o si el usuario aceptó el exceso
                 try {
                     const { error } = await supabase.from('entradas_almacen').insert({
                         orden_compra_id: ordenSeleccionada.id,
@@ -330,11 +315,41 @@ export default function OrdenesCompraPage() {
 
                     if (error) throw error;
 
+                    // Recalcular valores
+                    const cantidadRecibidaActual = await calcularCantidadRecibida(ordenSeleccionada.id);
+                    const cantidadOriginal = ordenSeleccionada.cantidad || ordenSeleccionada.solicitudes?.cantidad || 0;
+                    const cantidadFaltanteActualizada = Math.max(0, cantidadOriginal - cantidadRecibidaActual);
+
+                    // Actualizar estado
+                    let nuevoEstado = ordenSeleccionada.estado;
+                    if (cantidadRecibidaActual >= cantidadOriginal) {
+                        nuevoEstado = 'recibida';
+                    } else if (cantidadRecibidaActual > 0) {
+                        nuevoEstado = 'parcialmente_recibida';
+                    }
+
+                    if (nuevoEstado !== ordenSeleccionada.estado) {
+                        await supabase
+                        .from('ordenes_compra')
+                        .update({ estado: nuevoEstado })
+                        .eq('id', ordenSeleccionada.id);
+                    }
+
                     alert('Entrada registrada correctamente');
                     setShowEntradaModal(false);
                     setNuevaEntrada({ cantidad_recibida: '', recibido_por: '', observaciones: '' });
+
+                    // Actualizar orden seleccionada
+                    const ordenActualizada = {
+                        ...ordenSeleccionada,
+                        cantidadRecibida: cantidadRecibidaActual,
+                        cantidadFaltante: cantidadFaltanteActualizada,
+                        estado: nuevoEstado,
+                    };
+                    setOrdenSeleccionada(ordenActualizada);
+
                     cargarOrdenes();
-                    verHistorialDeOrden(ordenSeleccionada);
+                    verHistorialDeOrden(ordenActualizada);
                 } catch (error: any) {
                     console.error(error);
                     alert('Error al registrar entrada');
@@ -457,15 +472,6 @@ export default function OrdenesCompraPage() {
                     <h1 className="text-3xl font-bold text-gray-900">Órdenes de Compra</h1>
                     <p className="text-gray-600 mt-1">Generar y gestionar Órdenes de Compra + PDF para Sigo</p>
                     </div>
-                    <button
-                    onClick={() => {
-                        cargarSolicitudesAprobadas();
-                        setShowModal(true);
-                    }}
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-xl font-medium"
-                    >
-                    + Nueva Orden de Compra
-                    </button>
                     </div>
                     </div>
 
@@ -481,7 +487,7 @@ export default function OrdenesCompraPage() {
                     <option value="enviada">Enviada</option>
                     <option value="parcialmente_recibida">Recibida Parcial</option>
                     <option value="recibida">Recibida Total</option>
-                    <option value="cancelada">Cancelada</option>
+                    <option value="anulada">Anulada</option>
                     </select>
                     </div>
                     <div>
@@ -493,16 +499,65 @@ export default function OrdenesCompraPage() {
                     ))}
                     </select>
                     </div>
+
                     <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-700 mb-1">Buscar</label>
                     <input
                     type="text"
-                    placeholder="Buscar por proveedor o insumo..."
+                    placeholder="Buscar por Proveedor or Insumo..."
                     value={searchText}
                     onChange={(e) => setSearchText(e.target.value)}
                     className="w-full border rounded-xl p-2.5"
                     />
                     </div>
+
+                    <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">N° Orden</label>
+                    <input
+                    type="text"
+                    placeholder="OC-2026-..."
+                    value={numeroOcFiltro}
+                    onChange={(e) => setNumeroOcFiltro(e.target.value)}
+                    className="w-full border rounded-xl p-2.5"
+                    />
+                    </div>
+
+                    <div className="md:col-span-2 grid grid-cols-2 gap-4">
+                    <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Desde</label>
+                    <input
+                    type="date"
+                    value={fechaInicio}
+                    onChange={(e) => setFechaInicio(e.target.value)}
+                    className="w-full border rounded-xl p-2.5"
+                    />
+                    </div>
+                    <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
+                    <input
+                    type="date"
+                    value={fechaFin}
+                    onChange={(e) => setFechaFin(e.target.value)}
+                    className="w-full border rounded-xl p-2.5"
+                    />
+                    </div>
+                    </div>
+
+                    <button
+                    onClick={() => {
+                        setEstadoFiltro('todas');
+                        setObraFiltro('');
+                        setProveedorFiltro('');
+                        setFechaInicio('');
+                        setFechaFin('');
+                        setNumeroOcFiltro('');
+                        setSearchText('');
+                    }}
+                    className="px-4 py-2.5 text-sm border rounded-xl hover:bg-gray-100"
+                    >
+                    Limpiar Filtros
+                    </button>
+
                     </div>
                     </div>
 
@@ -516,7 +571,7 @@ export default function OrdenesCompraPage() {
                     <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">N° OC</th>
                     <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Obra</th>
                     <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Insumo</th>
-                    <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Cantidad Solicitada</th>
+                    <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Cantidad</th>
                     <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Recibido</th>
                     <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Proveedor</th>
                     <th className="px-6 py-4 text-right text-sm font-semibold text-gray-700">Total</th>
@@ -530,7 +585,7 @@ export default function OrdenesCompraPage() {
                         <tr><td colSpan={9} className="px-6 py-8 text-center text-gray-500">No se encontraron órdenes de compra.</td></tr>
                     ) : (
                         ordenesFiltradas.map((orden: any) => {
-                            const cantidadSolicitada = orden.solicitudes?.cantidad || 0;
+                            const cantidadSolicitada = orden.cantidad || orden.solicitudes?.cantidad || 0;
                             const recibido = orden.cantidadRecibida || 0;
                             const porcentaje = cantidadSolicitada > 0 ? Math.round((recibido / cantidadSolicitada) * 100) : 0;
 
@@ -540,13 +595,18 @@ export default function OrdenesCompraPage() {
                                 <td className="px-6 py-4 font-medium text-gray-900">{orden.numero_oc || '—'}</td>
                                 <td className="px-6 py-4 text-sm font-medium text-gray-800">{orden.solicitudes?.obras?.nombre || '—'}</td>
                                 <td className="px-6 py-4 text-sm text-gray-800">{orden.solicitudes?.insumo || '—'}</td>
-                                <td className="px-6 py-4 text-sm text-center text-gray-700">{cantidadSolicitada} {orden.solicitudes?.unidad || ''}</td>
+                                <td className="px-6 py-4 text-sm text-center text-gray-700">
+                                {orden.cantidad || 0} {orden.solicitudes?.unidad || ''}
+                                </td>
                                 <td className="px-6 py-4 text-sm text-center">
                                 <div className="flex flex-col items-center">
                                 <span className="font-medium text-green-600">{recibido}</span>
                                 {cantidadSolicitada > 0 && (
                                     <div className="w-20 bg-gray-200 rounded-full h-1.5 mt-1">
-                                    <div className="bg-green-500 h-1.5 rounded-full" style={{ width: `${porcentaje}%` }}></div>
+                                    <div
+                                    className="bg-green-500 h-1.5 rounded-full"
+                                    style={{ width: `${porcentaje}%` }}
+                                    />
                                     </div>
                                 )}
                                 </div>
@@ -560,11 +620,23 @@ export default function OrdenesCompraPage() {
                                 </td>
                                 <td className="px-6 py-4 text-center">
                                 <div className="flex justify-center gap-2 flex-wrap">
+                                {orden.estado !== 'anulada' && (
+                                    <button
+                                    onClick={() => {
+                                        setOrdenSeleccionada(orden);
+                                        setNuevaEntrada({ cantidad_recibida: orden.cantidadFaltante?.toString() || '', recibido_por: '', observaciones: '' });
+                                        setShowEntradaModal(true);
+                                    }}
+                                    className="px-3 py-1.5 text-xs bg-orange-600 hover:bg-orange-700 text-white rounded-lg"
+                                    >
+                                    + Entrada
+                                    </button>
+                                )}
                                 <button onClick={() => verHistorialDeOrden(orden)} className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg">📋 Historial</button>
                                 {(orden.estado === 'pendiente' || orden.estado === 'parcialmente_recibida') && (
                                     <button onClick={() => marcarComoEnviada(orden)} className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-lg">Enviar</button>
                                 )}
-                                {orden.estado !== 'cancelada' && orden.estado !== 'recibida' && (
+                                {orden.estado !== 'anulada' && orden.estado !== 'cancelada' && (
                                     <button onClick={() => cancelarOrden(orden)} className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-700 text-white rounded-lg">Cancelar</button>
                                 )}
                                 <button onClick={() => generarPDF(orden)} className="px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded-lg">📄 PDF</button>
@@ -579,56 +651,6 @@ export default function OrdenesCompraPage() {
                     </div>
                     </div>
 
-                    {/* Hasta aqui... (filtros y tabla igual que tenías) ... */}
-
-                    {/* =====  Modal de Nueva/Editar Orden  ===== */}
-                    {showModal && (
-                        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                        <div className="bg-white rounded-2xl p-8 w-full max-w-md">
-                        <div className="space-y-5">
-                        <div>
-                        <label className="block text-sm font-semibold mb-1">N° Orden</label>
-                        <input type="text" value={nuevaOC.numero_oc} readOnly className="w-full border rounded-xl p-3 bg-gray-100" />
-                        </div>
-
-                        <div>
-                        <label className="block text-sm font-semibold mb-1">Proveedor</label>
-                        <input
-                        type="text"
-                        value={nuevaOC.proveedor}
-                        onChange={(e) => setNuevaOC(prev => ({ ...prev, proveedor: e.target.value }))}
-                        className="w-full border rounded-xl p-3"
-                        />
-                        </div>
-
-                        <div>
-                        <label className="block text-sm font-semibold mb-1">Total (COP)</label>
-                        <input
-                        type="number"
-                        value={nuevaOC.total}
-                        onChange={(e) => setNuevaOC(prev => ({ ...prev, total: e.target.value }))}
-                        className="w-full border rounded-xl p-3"
-                        />
-                        </div>
-
-                        <div>
-                        <label className="block text-sm font-semibold mb-1">Observaciones</label>
-                        <textarea
-                        value={nuevaOC.observaciones}
-                        onChange={(e) => setNuevaOC(prev => ({ ...prev, observaciones: e.target.value }))}
-                        className="w-full border rounded-xl p-3 h-24"
-                        />
-                        </div>
-                        </div>
-
-                        <div className="flex gap-3 mt-8">
-                        <button onClick={cerrarModal} className="flex-1 py-3 border rounded-xl">Cancelar</button>
-                        </div>
-                        </div>
-                        </div>
-                    )}
-
-                    {/* Historial y Entrada modal (mantén los que ya tenías) */}
                     {/* Modal Historial */}
                     {showHistoryModal && ordenSeleccionada && (
                         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -636,28 +658,44 @@ export default function OrdenesCompraPage() {
                         <div className="p-6 border-b">
                         <h2 className="text-2xl font-bold">Historial de la Orden</h2>
                         <p className="text-lg text-gray-700 mt-1">{ordenSeleccionada.solicitudes?.insumo} — {ordenSeleccionada.proveedor}</p>
+                        <p className="text-sm text-gray-500">Total Orden: ${Number(ordenSeleccionada.total).toLocaleString('es-CO')}</p>
                         </div>
                         <div className="flex-1 overflow-auto p-6">
                         {historialOrden.length === 0 ? (
                             <p className="text-center text-gray-500 py-8">Aún no hay entradas.</p>
                         ) : (
-                            historialOrden.map((entrada: any) => (
+                            <>
+                            {historialOrden.map((entrada: any) => (
                                 <div key={entrada.id} className="border rounded-xl p-4 mb-3">
+                                <div className="flex justify-between">
                                 <p className="font-semibold">+{entrada.cantidad_recibida} {entrada.unidad}</p>
                                 <p className="text-sm text-gray-500">{new Date(entrada.fecha_entrada).toLocaleDateString('es-CO')}</p>
                                 </div>
-                            ))
+                                <p className="text-sm text-gray-600 mt-1">Recibido por: {entrada.recibido_por || '—'}</p>
+                                {entrada.observaciones && <p className="text-sm text-gray-500 mt-1">{entrada.observaciones}</p>}
+                                </div>
+                            ))}
+                            <div className="mt-6 p-4 bg-gray-50 rounded-xl">
+                            <p className="font-semibold">Total Recibido: {ordenSeleccionada.cantidadRecibida} {ordenSeleccionada.solicitudes?.unidad}</p>
+                            <p className="text-sm text-gray-500">Faltante: {ordenSeleccionada.cantidadFaltante} {ordenSeleccionada.solicitudes?.unidad}</p>
+                            </div>
+                            </>
                         )}
                         </div>
                         <div className="p-6 border-t flex gap-3">
                         <button onClick={() => setShowHistoryModal(false)} className="flex-1 py-3 border rounded-xl">Cerrar</button>
                         <button
                         onClick={() => {
+                            if (ordenSeleccionada.estado === 'anulada') {
+                                alert("No se pueden registrar entradas en órdenes anuladas.");
+                                return;
+                            }
                             setShowHistoryModal(false);
                             setNuevaEntrada({ cantidad_recibida: ordenSeleccionada.cantidadFaltante?.toString() || '', recibido_por: '', observaciones: '' });
                             setShowEntradaModal(true);
                         }}
-                        className="flex-1 py-3 bg-orange-600 text-white rounded-xl font-medium"
+                        className="flex-1 py-3 bg-orange-600 text-white rounded-xl font-medium disabled:bg-gray-400"
+                        disabled={ordenSeleccionada.estado === 'anulada'}
                         >
                         Registrar nueva entrada
                         </button>
