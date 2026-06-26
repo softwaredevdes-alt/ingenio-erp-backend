@@ -40,9 +40,11 @@ export default function CotizacionesPage() {
   const [selectedObraId, setSelectedObraId] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [proveedorFiltro, setProveedorFiltro] = useState('');
+  const [solicitanteFiltro, setSolicitanteFiltro] = useState('');
+  const [solicitanteTerm, setSolicitanteTerm] = useState('');
   const [fechaInicio, setFechaInicio] = useState('');
   const [fechaFin, setFechaFin] = useState('');
+  const [estadoFiltro, setEstadoFiltro] = useState('todas');
 
   // Modales
   const [showAddModal, setShowAddModal] = useState(false);
@@ -58,11 +60,27 @@ export default function CotizacionesPage() {
     creado_por: '',
   });
 
+  const limpiarFiltros = () => {
+    setSelectedObraId(null);
+    setSearchInput('');
+    setSearchTerm('');
+    setSolicitanteFiltro('');
+    setFechaInicio('');
+    setFechaFin('');
+    setEstadoFiltro('todas');
+  };
+
   // Debounce búsqueda
   useEffect(() => {
-    const timer = setTimeout(() => setSearchTerm(searchInput), 400);
+    const timer = setTimeout(() => setSearchTerm(searchInput), 800);
     return () => clearTimeout(timer);
   }, [searchInput]);
+
+  // Debounce para Solicitante
+  useEffect(() => {
+    const timer = setTimeout(() => setSolicitanteTerm(solicitanteFiltro), 500);
+    return () => clearTimeout(timer);
+  }, [solicitanteFiltro]);
 
   // Cargar obras
   useEffect(() => {
@@ -83,23 +101,36 @@ export default function CotizacionesPage() {
       .in('estado', ['pendiente', 'cotizada'])
       .order('fecha_solicitud', { ascending: false });
 
-      if (selectedObraId) query = query.eq('obra_id', selectedObraId);
+      if (selectedObraId) {
+        query = query.eq('obra_id', selectedObraId);
+      }
+
+      if (estadoFiltro !== 'todas') {
+        query = query.eq('estado', estadoFiltro);
+      }
 
       const { data, error } = await query;
       if (error) throw error;
 
       let filtered = data || [];
 
+      // Filtro por Insumo
       if (searchTerm.trim() !== '') {
         const texto = searchTerm.toLowerCase().trim();
-        filtered = filtered.filter((s: any) => s.insumo?.toLowerCase().includes(texto));
+        filtered = filtered.filter((s: any) =>
+        s.insumo?.toLowerCase().includes(texto)
+        );
       }
 
-      if (proveedorFiltro.trim() !== '') {
-        // Filtrar por proveedor en cotizaciones asociadas (más complejo)
-        // Por ahora lo dejamos solo en búsqueda general
+      // Filtro por Solicitante
+      if (solicitanteTerm.trim() !== '') {
+        const texto = solicitanteTerm.toLowerCase().trim();
+        filtered = filtered.filter((s: any) =>
+        s.solicitado_por?.toLowerCase().includes(texto)
+        );
       }
 
+      // Filtro por Fecha
       if (fechaInicio || fechaFin) {
         filtered = filtered.filter((s: any) => {
           const fecha = new Date(s.fecha_solicitud);
@@ -132,9 +163,10 @@ export default function CotizacionesPage() {
       setLoading(false);
     }
   };
+
   useEffect(() => {
     cargarSolicitudes();
-  }, [selectedObraId, searchTerm]);
+  }, [selectedObraId, estadoFiltro, searchTerm, solicitanteTerm, fechaInicio, fechaFin]);
 
   const cargarCotizaciones = async (solicitudId: number) => {
     const { data } = await supabase
@@ -164,8 +196,15 @@ export default function CotizacionesPage() {
       return;
     }
 
-    if (cantidadNueva > selectedSolicitud.cantidad) {
-      alert(`La cantidad de la cotización (${cantidadNueva}) no puede superar la cantidad solicitada (${selectedSolicitud.cantidad}).`);
+    // Calcular cantidad máxima permitida
+    const cantidadYaSeleccionada = cotizaciones
+    .filter(c => c.estado === 'seleccionada')
+    .reduce((sum, c) => sum + Number(c.cantidad || 0), 0);
+
+    const cantidadMaxima = selectedSolicitud.cantidad - cantidadYaSeleccionada;
+
+    if (cantidadNueva > cantidadMaxima) {
+      alert(`La cantidad máxima permitida es ${cantidadMaxima} ${selectedSolicitud.unidad} (restante por cotizar).`);
       return;
     }
 
@@ -224,10 +263,18 @@ export default function CotizacionesPage() {
       return;
     }
 
-    if (cantidadNueva > selectedSolicitud.cantidad) {
-      alert(`La cantidad de la cotización (${cantidadNueva}) no puede superar la cantidad solicitada (${selectedSolicitud.cantidad}).`);
+    // === NUEVA LÓGICA DE VALIDACIÓN ===
+    const cantidadYaSeleccionada = cotizaciones
+    .filter(c => c.estado === 'seleccionada' && c.id !== editingCotizacion.id) // excluimos la que estamos editando
+    .reduce((sum, c) => sum + Number(c.cantidad || 0), 0);
+
+    const cantidadMaxima = selectedSolicitud.cantidad - cantidadYaSeleccionada;
+
+    if (cantidadNueva > cantidadMaxima) {
+      alert(`La cantidad máxima permitida es ${cantidadMaxima} ${selectedSolicitud.unidad} (restante por cotizar).`);
       return;
     }
+    // ===================================
 
     try {
       const { error } = await supabase.from('cotizaciones').update({
@@ -269,7 +316,6 @@ export default function CotizacionesPage() {
       }
       cargarSolicitudes();
 
-      // MSG to the user: Recargar página de OC
       alert('Cambios guardados. Por favor recarga la página de Órdenes de Compra para ver las actualizaciones.');
     } catch (error) {
       console.error(error);
@@ -364,9 +410,8 @@ export default function CotizacionesPage() {
       const cantidadUsada = Number(cotizacion.cantidad || solicitudData?.cantidad || 0);
       const total = Number(cotizacion.precio_unitario) * cantidadUsada;
 
-      const currentYear = new Date().getFullYear();
-      const timestamp = Date.now().toString().slice(-6);
-      const numeroOC = `OC-${currentYear}-${timestamp}`;
+      // Genera Numero de Orden
+      const numeroOC = generarNumeroOC();
 
       const { error: ocError } = await supabase.from('ordenes_compra').insert({
         solicitud_id: cotizacion.solicitud_id,
@@ -377,7 +422,7 @@ export default function CotizacionesPage() {
         cotizacion_id: cotizacion.id,
         estado: 'pendiente_aprobacion',
         fecha_emision: new Date().toISOString(),
-                                                                              observaciones: `Creada automáticamente desde cotización #${cotizacion.id}`,
+        observaciones: `Creada automáticamente desde cotización #${cotizacion.id}`,
       });
 
       if (ocError) throw ocError;
@@ -399,10 +444,6 @@ export default function CotizacionesPage() {
     }
   };
 
-  useEffect(() => {
-    cargarSolicitudes();
-  }, [selectedObraId, searchTerm]);
-
   // === Cálculo de resumen ===
   const resumen = cotizaciones.length > 0 ? {
     cantidad: cotizaciones.length,
@@ -413,12 +454,17 @@ export default function CotizacionesPage() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
-    <div className="mb-8">
-    <Link href="/compras" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium mb-2">
-    ← Volver al módulo de Compras
+    {/* Encabezado */}
+    <div className="mb-8 flex items-center justify-between">
+    <Link href="/compras" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
+    ← Volver a Compras
     </Link>
+
     <h1 className="text-3xl font-bold text-gray-900">Cotizaciones</h1>
-    <p className="text-gray-600 mt-1">Comparar precios de proveedores y seleccionar las mejores opciones</p>
+
+    <Link href="/compras/oc" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
+    Ir a Órdenes de Compra →
+    </Link>
     </div>
 
     {loading ? (
@@ -442,23 +488,20 @@ export default function CotizacionesPage() {
       </select>
       </div>
 
-      <div className="flex items-end">
-      <button
-      onClick={() => {
-        setSelectedObraId(null);
-        setSearchInput('');
-        setSearchTerm('');
-        setProveedorFiltro('');
-        setFechaInicio('');
-        setFechaFin('');
-      }}
-      className="w-full px-6 py-3 text-sm border rounded-xl hover:bg-gray-100"
+      <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
+      <select
+      value={estadoFiltro}
+      onChange={(e) => setEstadoFiltro(e.target.value)}
+      className="w-full border rounded-xl p-3"
       >
-      Limpiar Filtros
-      </button>
+      <option value="todas">Todos</option>
+      <option value="pendiente">Pendiente</option>
+      <option value="cotizada">Cotizada</option>
+      <option value="seleccionada">Seleccionada</option>
+      </select>
       </div>
 
-      <div className="md:col-span-2 grid grid-cols-2 gap-4">
       <div>
       <label className="block text-sm font-medium text-gray-700 mb-1">Desde</label>
       <input
@@ -468,6 +511,7 @@ export default function CotizacionesPage() {
       className="w-full border rounded-xl p-3"
       />
       </div>
+
       <div>
       <label className="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
       <input
@@ -479,8 +523,8 @@ export default function CotizacionesPage() {
       </div>
       </div>
 
-      {/* Segunda fila: Búsquedas */}
-      <div className="md:col-span-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Segunda fila */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
       <div>
       <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Insumo</label>
       <input
@@ -491,16 +535,32 @@ export default function CotizacionesPage() {
       className="w-full border rounded-xl p-3"
       />
       </div>
+
       <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Proveedor</label>
+      <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Solicitante</label>
       <input
       type="text"
-      placeholder="Buscar proveedor..."
-      value={proveedorFiltro}
-      onChange={(e) => setProveedorFiltro(e.target.value)}
+      placeholder="Buscar por quien solicitó..."
+      value={solicitanteFiltro}
+      onChange={(e) => setSolicitanteFiltro(e.target.value)}
       className="w-full border rounded-xl p-3"
       />
       </div>
+
+      <div className="flex items-end">
+      <button
+      onClick={() => {
+        setSelectedObraId(null);
+        setSearchInput('');
+        setSearchTerm('');
+        setSolicitanteFiltro('');
+        setFechaInicio('');
+        setFechaFin('');
+      }}
+      className="w-full px-6 py-3 text-sm border rounded-xl hover:bg-gray-100"
+      >
+      Limpiar Filtros
+      </button>
       </div>
       </div>
       </div>
@@ -553,49 +613,67 @@ export default function CotizacionesPage() {
       ) : (
         <>
         <div className="p-4 border-b bg-gray-50">
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-start mb-3">
+        {/* Panel de la derecha  */}
         <div>
-        <h2 className="font-semibold">{selectedSolicitud.insumo}</h2>
-        <p className="text-sm text-gray-500">{selectedSolicitud.obras?.nombre}</p>
-        <p className="text-sm text-gray-500">
-        Cantidad solicitada: {selectedSolicitud.cantidad} {selectedSolicitud.unidad} |
-        Seleccionada: {cotizaciones.reduce((sum, c) => sum + (c.estado === 'seleccionada' ? Number(c.cantidad) : 0), 0)} |
-        Restante: {selectedSolicitud.cantidad - cotizaciones.reduce((sum, c) => sum + (c.estado === 'seleccionada' ? Number(c.cantidad) : 0), 0)} {selectedSolicitud.unidad}
-        </p>
+        <h2 className="font-semibold text-lg">{selectedSolicitud.insumo}</h2>
+        <p className="text-base text-gray-600 font-medium">{selectedSolicitud.obras?.nombre}</p>
         </div>
         <button
         onClick={() => {
           setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
           setShowAddModal(true);
-        }} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-xl text-sm font-medium">
-        + Agregar Cotización
+        }}
+        className="inline-flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 active:bg-green-800 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-all"
+        >
+        <span className="text-lg leading-none">+</span>
+        Agregar Cotización
         </button>
         </div>
 
-        {/* === RESUMEN DE TOTALES === */}
+        {/* Resumen de cantidades */}
         {resumen && cotizaciones.length > 0 && (
           <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="bg-white border rounded-xl p-3 text-center">
+          {/* Cotizaciones */}
+          <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
+          <div className="text-xl">📋</div>
+          <div>
           <p className="text-xs text-gray-500">Cotizaciones</p>
-          <p className="text-2xl font-bold text-gray-900">{resumen.cantidad}</p>
+          <p className="text-2xl font-bold text-gray-900 leading-none">{resumen.cantidad}</p>
           </div>
-          <div className="bg-white border rounded-xl p-3 text-center">
+          </div>
+
+          {/* Precio más bajo */}
+          <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
+          <div className="text-xl">⬇️</div>
+          <div>
           <p className="text-xs text-gray-500">Precio más bajo</p>
-          <p className="text-xl font-bold text-green-600">
+          <p className="text-xl font-bold text-green-600 leading-none">
           ${resumen.precioMinimo.toLocaleString('es-CO')}
           </p>
           </div>
-          <div className="bg-white border rounded-xl p-3 text-center">
+          </div>
+
+          {/* Promedio */}
+          <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
+          <div className="text-xl">📊</div>
+          <div>
           <p className="text-xs text-gray-500">Promedio</p>
-          <p className="text-xl font-bold text-blue-600">
+          <p className="text-xl font-bold text-blue-600 leading-none">
           ${resumen.precioPromedio.toFixed(0).toLocaleString('es-CO')}
           </p>
           </div>
-          <div className="bg-white border rounded-xl p-3 text-center">
+          </div>
+
+          {/* Precio más alto */}
+          <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
+          <div className="text-xl">⬆️</div>
+          <div>
           <p className="text-xs text-gray-500">Precio más alto</p>
-          <p className="text-xl font-bold text-red-600">
+          <p className="text-xl font-bold text-red-600 leading-none">
           ${resumen.precioMaximo.toLocaleString('es-CO')}
           </p>
+          </div>
           </div>
           </div>
         )}
@@ -610,47 +688,74 @@ export default function CotizacionesPage() {
             const isSelected = cot.estado === 'seleccionada';
             const total = cot.precio_unitario * cot.cantidad;
 
-          return (
-            <div
-            key={cot.id}
-            className={`border rounded-2xl p-4 transition-all ${isSelected
-              ? 'border-green-600 bg-green-50 shadow-md'
-          : 'border-gray-200 hover:border-gray-300'}`}
-          >
-          <div className="flex justify-between items-start">
-          <div>
-          <p className="font-semibold text-lg">{cot.proveedor}</p>
-          <p className="text-sm text-gray-600">
-          ${cot.precio_unitario.toLocaleString('es-CO')} × {cot.cantidad} {cot.unidad}
-          </p>
-          {cot.tiempo_entrega_dias && (
-            <p className="text-xs text-gray-500 mt-0.5">Entrega en {cot.tiempo_entrega_dias} días</p>
-          )}
-          {cot.creado_por && (
-            <p className="text-xs text-gray-500 mt-1">Creado por: {cot.creado_por}</p>
-          )}
-          </div>
+            return (
+              <div
+              key={cot.id}
+              className={`border rounded-2xl p-5 transition-all ${
+                isSelected
+                ? 'border-green-600 bg-green-50 shadow-md'
+                : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+              }`}
+              >
+              <div className="flex justify-between items-start">
+              <div>
+              <p className="font-semibold text-lg text-gray-900">{cot.proveedor}</p>
+              <p className="text-sm text-gray-600 mt-0.5">
+              ${cot.precio_unitario.toLocaleString('es-CO')} × {cot.cantidad} {cot.unidad}
+              </p>
+              {cot.tiempo_entrega_dias && (
+                <p className="text-xs text-gray-500 mt-1">
+                ⏱ Entrega en {cot.tiempo_entrega_dias} días
+                </p>
+              )}
+              {cot.creado_por && (
+                <p className="text-xs text-gray-500 mt-1">Creado por: {cot.creado_por}</p>
+              )}
+              </div>
 
-          <div className="text-right">
-          <p className="text-2xl font-bold text-gray-900">
-          ${total.toLocaleString('es-CO')}
-          </p>
+              <div className="text-right">
+              <p className="text-2xl font-bold text-gray-900">
+              ${total.toLocaleString('es-CO')}
+              </p>
+              {isSelected && (
+                <span className="inline-block mt-1 px-2.5 py-0.5 text-xs font-medium bg-green-600 text-white rounded-full">
+                Seleccionada
+                </span>
+              )}
+              </div>
+              </div>
 
-          </div>
-          </div>
-          <div className="flex gap-2 mt-2 justify-end">
-          {!isSelected && (
-            <button onClick={() => seleccionarCotizacion(cot)}
-            className="text-sm px-4 py-1.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 font-medium">Seleccionar</button>
-          )}
-          <button
-          onClick={() => abrirEditar(cot)} className="text-sm px-3 py-1.5 border rounded-xl hover:bg-gray-100">Editar</button>
-          <button
-          onClick={() => eliminarCotizacion(cot)} className="text-sm px-3 py-1.5 text-red-600 hover:bg-red-50 rounded-xl" >Eliminar</button>
-          </div>
-          {cot.observaciones && <p className="mt-3 text-sm text-gray-600 border-t pt-3">{cot.observaciones}</p>}
-          </div>
-          );
+              {/* Botones */}
+              <div className="flex gap-2 mt-4 justify-end">
+              {!isSelected && (
+                <button
+                onClick={() => seleccionarCotizacion(cot)}
+                className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors"
+                >
+                Seleccionar
+                </button>
+              )}
+              <button
+              onClick={() => abrirEditar(cot)}
+              className="px-3 py-1.5 text-sm border border-gray-300 hover:bg-gray-100 rounded-xl transition-colors"
+              >
+              Editar
+              </button>
+              <button
+              onClick={() => eliminarCotizacion(cot)}
+              className="px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+              >
+              Eliminar
+              </button>
+              </div>
+
+              {cot.observaciones && (
+                <div className="mt-3 pt-3 border-t text-sm text-gray-600">
+                {cot.observaciones}
+                </div>
+              )}
+              </div>
+            );
           })}
           </div>
         )}
@@ -666,7 +771,10 @@ export default function CotizacionesPage() {
     {showAddModal && selectedSolicitud && (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl p-8 w-full max-w-md">
-      <h2 className="text-2xl font-bold mb-6">Nueva Cotización</h2>
+      <h2 className="text-2xl font-bold mb-1">Nueva Cotización</h2>
+      <p className="text-sm text-gray-500 mb-6">
+      Para: <span className="font-medium text-gray-700">{selectedSolicitud?.insumo}</span>
+      </p>
       <div className="space-y-4">
       <div>
       <label className="block text-sm font-semibold mb-1">Proveedor *</label>
@@ -695,7 +803,12 @@ export default function CotizacionesPage() {
       className="w-full border rounded-xl p-2.5"
       />
       <p className="text-xs text-gray-500 mt-1">
-      Cantidad original solicitada: {selectedSolicitud?.cantidad} {selectedSolicitud?.unidad}
+      Restante por cotizar: {
+        selectedSolicitud.cantidad -
+        cotizaciones
+        .filter(c => c.estado === 'seleccionada')
+        .reduce((sum, c) => sum + Number(c.cantidad || 0), 0)
+      } {selectedSolicitud.unidad}
       </p>
       </div>
       <div>
@@ -727,7 +840,10 @@ export default function CotizacionesPage() {
     {showEditModal && editingCotizacion && (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl p-8 w-full max-w-md">
-      <h2 className="text-2xl font-bold mb-6">Editar Cotización</h2>
+      <h2 className="text-2xl font-bold mb-1">Editar Cotización</h2>
+      <p className="text-sm text-gray-500 mb-6">
+      Para: <span className="font-medium text-gray-700">{selectedSolicitud?.insumo}</span>
+      </p>
       <div className="space-y-4">
       <div>
       <label className="block text-sm font-semibold mb-1">Proveedor</label>
@@ -750,6 +866,14 @@ export default function CotizacionesPage() {
       onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, cantidad: e.target.value })}
       className="w-full border rounded-xl p-2.5"
       />
+      <p className="text-xs text-gray-500 mt-1">
+      Restante por cotizar: {
+        selectedSolicitud.cantidad -
+        cotizaciones
+        .filter(c => c.estado === 'seleccionada')
+        .reduce((sum, c) => sum + Number(c.cantidad || 0), 0)
+      } {selectedSolicitud.unidad}
+      </p>
       </div>
       <div>
       <label className="block text-sm font-semibold mb-1">Tiempo de entrega (días)</label>

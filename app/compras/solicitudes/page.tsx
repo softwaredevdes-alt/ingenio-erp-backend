@@ -24,16 +24,25 @@ export default function SolicitudesPage() {
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedSolicitud, setSelectedSolicitud] = useState<Solicitud | null>(null);
+  const [showNewModal, setShowNewModal] = useState(false);
 
   // Filtros
   const [selectedObraId, setSelectedObraId] = useState<string | null>(null);
   const [estadoFiltro, setEstadoFiltro] = useState<string>('todas');
-  const [searchText, setSearchText] = useState('');
   const [fechaInicio, setFechaInicio] = useState('');
   const [fechaFin, setFechaFin] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [proveedorFiltro, setProveedorFiltro] = useState('');
+  const [solicitanteFiltro, setSolicitanteFiltro] = useState('');
+  const limpiarFiltros = () => {
+    setEstadoFiltro('todas');
+    setSelectedObraId(null);
+    setSearchInput('');
+    setSearchTerm('');
+    setSolicitanteFiltro('');
+    setFechaInicio('');
+    setFechaFin('');
+  };
 
   // Debounce búsqueda
   useEffect(() => {
@@ -81,17 +90,27 @@ export default function SolicitudesPage() {
       const { data, error } = await query;
       if (error) throw error;
 
-      let datos = data || [];
+      let filtered = data || [];
 
-      if (searchText.trim() !== '') {
-        const texto = searchText.toLowerCase().trim();
-        datos = datos.filter((s: any) =>
+      // Filtro por Insumo / Notas / Solicitado por
+      if (searchTerm.trim() !== '') {
+        const texto = searchTerm.toLowerCase().trim();
+        filtered = filtered.filter((s: any) =>
         s.insumo?.toLowerCase().includes(texto) ||
         s.notas?.toLowerCase().includes(texto) ||
         s.solicitado_por?.toLowerCase().includes(texto)
         );
       }
 
+      // Filtro por Proveedor
+      if (solicitanteFiltro.trim() !== '') {
+        const texto = solicitanteFiltro.toLowerCase().trim();
+        filtered = filtered.filter((s: any) =>
+        s.solicitado_por?.toLowerCase().includes(texto)
+        );
+      }
+
+      // Filtro por Fecha
       if (fechaInicio || fechaFin) {
         filtered = filtered.filter((s: any) => {
           const fecha = new Date(s.fecha_solicitud);
@@ -101,7 +120,7 @@ export default function SolicitudesPage() {
         });
       }
 
-      setSolicitudes(datos);
+      setSolicitudes(filtered);
     } catch (error) {
       console.error('Error cargando solicitudes:', error);
     } finally {
@@ -111,7 +130,7 @@ export default function SolicitudesPage() {
 
   useEffect(() => {
     cargarSolicitudes();
-  }, [selectedObraId, estadoFiltro, searchText]);
+  }, [selectedObraId, estadoFiltro, searchTerm, solicitanteFiltro, fechaInicio, fechaFin]);
 
   // Crear nueva solicitud
   const crearSolicitud = async () => {
@@ -125,11 +144,11 @@ export default function SolicitudesPage() {
         obra_id: nuevaSolicitud.obra_id,
         insumo: nuevaSolicitud.insumo,
         cantidad: Number(nuevaSolicitud.cantidad),
-                                                                  unidad: nuevaSolicitud.unidad,
-                                                                  estado: 'pendiente',
-                                                                  fecha_solicitud: new Date().toISOString(),
-                                                                  solicitado_por: nuevaSolicitud.solicitado_por || null, // ← Guardamos el creador
-                                                                  notas: nuevaSolicitud.notas || null,
+        unidad: nuevaSolicitud.unidad,
+        estado: 'pendiente',
+        fecha_solicitud: new Date().toISOString(),
+        solicitado_por: nuevaSolicitud.solicitado_por || null, // ← Guardamos el creador
+        notas: nuevaSolicitud.notas || null,
       });
 
       if (error) throw error;
@@ -151,7 +170,17 @@ export default function SolicitudesPage() {
     }
   };
 
-  const rechazarSolicitud = async (id: number) => {
+  const rechazarSolicitud = async (id: number, estado: string) => {
+    if (estado === 'rechazada') {
+      alert('Esta solicitud ya está rechazada.');
+      return;
+    }
+
+    if (estado === 'aprobada') {
+      alert('No se puede rechazar una solicitud que ya está APROBADA.');
+      return;
+    }
+
     if (!confirm('¿Rechazar esta solicitud?')) return;
 
     try {
@@ -172,52 +201,37 @@ export default function SolicitudesPage() {
 
   const getEstadoColor = (estado: string) => {
     switch (estado) {
-      case 'pendiente': return 'bg-yellow-100 text-yellow-700';
-      case 'cotizada': return 'bg-blue-100 text-blue-700';
-      case 'aprobada': return 'bg-green-100 text-green-700';
-      case 'rechazada': return 'bg-red-100 text-red-700';
-      default: return 'bg-gray-100 text-gray-700';
+      case 'pendiente':
+        return 'bg-yellow-100 text-yellow-800 border border-yellow-200';
+      case 'cotizada':
+        return 'bg-blue-100 text-blue-800 border border-blue-200';
+      case 'aprobada':
+        return 'bg-green-100 text-green-800 border border-green-200';
+      case 'rechazada':
+        return 'bg-red-100 text-red-800 border border-red-200';
+      default:
+        return 'bg-gray-100 text-gray-700 border border-gray-200';
     }
   };
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
     {/* Encabezado */}
-    <div className="mb-8">
-    <Link href="/compras" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium mb-2">
-    ← Volver al módulo de Compras
+    <div className="mb-8 flex items-center justify-between">
+    <Link href="/compras" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
+    ← Volver a Compras
     </Link>
-    <div className="flex items-center justify-between">
-    <div>
-    <h1 className="text-3xl font-bold text-gray-900">Solicitudes de Materiales</h1>
-    <p className="text-gray-600 mt-1">Crear y gestionar solicitudes de insumos</p>
-    </div>
-    <button
-    onClick={() => setShowModal(true)}
-    className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-medium flex items-center gap-2"
-    >
-    + Nueva Solicitud
-    </button>
-    </div>
+
+    <h1 className="text-3xl font-bold text-gray-900">Solicitud de Materiales e Insumos</h1>
+
+    <Link href="/compras/cotizaciones" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
+    Ir a Cotizaciones →
+    </Link>
     </div>
 
     {/* Filtros */}
     <div className="bg-white rounded-2xl shadow p-6 mb-6">
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-    <div>
-    <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
-    <select
-    value={estadoFiltro}
-    onChange={(e) => setEstadoFiltro(e.target.value)}
-    className="w-full border rounded-xl p-3"
-    >
-    <option value="todas">Todos</option>
-    <option value="pendiente">Pendiente</option>
-    <option value="aprobada">Aprobada</option>
-    <option value="rechazada">Rechazada</option>
-    </select>
-    </div>
-
+    <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
     <div>
     <label className="block text-sm font-medium text-gray-700 mb-1">Obra</label>
     <select
@@ -232,24 +246,53 @@ export default function SolicitudesPage() {
     </select>
     </div>
 
-    <div className="flex items-end">
-    <button
-    onClick={() => {
-      setEstadoFiltro('todas');
-      setSelectedObraId(null);
-      setSearchInput('');
-      setSearchTerm('');
-      setProveedorFiltro('');
-      setFechaInicio('');
-      setFechaFin('');
-    }}
-    className="w-full px-6 py-3 text-sm border rounded-xl hover:bg-gray-100"
+    <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
+    <select
+    value={estadoFiltro}
+    onChange={(e) => setEstadoFiltro(e.target.value)}
+    className="w-full border rounded-xl p-3"
     >
-    Limpiar Filtros
-    </button>
+    <option value="todas">Todos</option>
+    <option value="pendiente">Pendiente</option>
+    <option value="cotizada">Cotizada</option>
+    <option value="aprobada">Aprobada</option>
+    <option value="rechazada">Rechazada</option>
+    </select>
     </div>
 
-    <div className="md:col-span-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+    <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Desde</label>
+    <input
+    type="date"
+    value={fechaInicio}
+    onChange={(e) => setFechaInicio(e.target.value)}
+    className="w-full border rounded-xl p-3"
+    />
+    </div>
+
+    <div>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
+    <input
+    type="date"
+    value={fechaFin}
+    onChange={(e) => setFechaFin(e.target.value)}
+    className="w-full border rounded-xl p-3"
+    />
+    </div>
+
+    <div className="flex items-end">
+    <button
+    onClick={() => setShowNewModal(true)}
+    className="w-full bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-medium"
+    >
+    + Nueva Solicitud
+    </button>
+    </div>
+    </div>
+
+    {/* Segunda fila */}
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
     <div>
     <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Insumo</label>
     <input
@@ -260,40 +303,29 @@ export default function SolicitudesPage() {
     className="w-full border rounded-xl p-3"
     />
     </div>
+
     <div>
-    <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Proveedor</label>
+    <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Solicitante</label>
     <input
     type="text"
-    placeholder="Buscar proveedor..."
-    value={proveedorFiltro}
-    onChange={(e) => setProveedorFiltro(e.target.value)}
+    placeholder="Buscar solicitante..."
+    value={solicitanteFiltro}
+    onChange={(e) => setSolicitanteFiltro(e.target.value)}
     className="w-full border rounded-xl p-3"
     />
+    </div>
+
+    <div className="flex items-end">
+    <button
+    onClick={limpiarFiltros}
+    className="w-full px-6 py-3 text-sm border rounded-xl hover:bg-gray-100"
+    >
+    Limpiar Filtros
+    </button>
+    </div>
     </div>
     </div>
 
-    <div className="md:col-span-4 grid grid-cols-2 gap-4">
-    <div>
-    <label className="block text-sm font-medium text-gray-700 mb-1">Desde</label>
-    <input
-    type="date"
-    value={fechaInicio}
-    onChange={(e) => setFechaInicio(e.target.value)}
-    className="w-full border rounded-xl p-3"
-    />
-    </div>
-    <div>
-    <label className="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
-    <input
-    type="date"
-    value={fechaFin}
-    onChange={(e) => setFechaFin(e.target.value)}
-    className="w-full border rounded-xl p-3"
-    />
-    </div>
-    </div>
-    </div>
-    </div>
 
     {/* Tabla */}
     {loading ? (
@@ -334,8 +366,8 @@ export default function SolicitudesPage() {
           <td className="px-6 py-4 text-sm text-center text-gray-700">{sol.cantidad} {sol.unidad}</td>
           <td className="px-6 py-4 text-sm text-gray-600">{sol.solicitado_por || '—'}</td>
           <td className="px-6 py-4 text-center">
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${sol.estado === 'aprobada' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-          {sol.estado}
+          <span className={`px-3 py-1 rounded-full text-xs font-medium ${getEstadoColor(sol.estado)}`}>
+          {sol.estado.charAt(0).toUpperCase() + sol.estado.slice(1)}
           </span>
           </td>
           <td className="px-6 py-4 text-center">
@@ -343,11 +375,11 @@ export default function SolicitudesPage() {
           <button
           onClick={(e) => {
             e.stopPropagation();
-            rechazarSolicitud(sol.id);
+            rechazarSolicitud(sol.id, sol.estado);
           }}
-          className="text-xs px-3 py-1 text-red-600 hover:bg-red-50 rounded-xl"
+          className="px-3 py-1 text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 hover:border-red-300 rounded-lg transition-all"
           >
-          Rechazar
+          x Rechazar
           </button>
           </div>
           </td>
@@ -457,6 +489,100 @@ export default function SolicitudesPage() {
       </div>
       </div>
     )}
+
+    {/* Modal Crear Solicitud */}
+    {showNewModal && (
+      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-2xl p-8 w-full max-w-md">
+      <h2 className="text-2xl font-bold mb-6">Nueva Solicitud</h2>
+
+      <div className="space-y-4">
+      <div>
+      <label className="block text-sm font-semibold mb-1">Obra *</label>
+      <select
+      value={nuevaSolicitud.obra_id}
+      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, obra_id: e.target.value })}
+      className="w-full border rounded-xl p-2.5"
+      >
+      <option value="">Selecciona una obra</option>
+      {obras.map((o) => (
+        <option key={o.id} value={o.id}>{o.nombre}</option>
+      ))}
+      </select>
+      </div>
+
+      <div>
+      <label className="block text-sm font-semibold mb-1">Insumo / Material *</label>
+      <input
+      type="text"
+      value={nuevaSolicitud.insumo}
+      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, insumo: e.target.value })}
+      className="w-full border rounded-xl p-2.5"
+      placeholder="Ej: Cemento gris 50kg"
+      />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+      <div>
+      <label className="block text-sm font-semibold mb-1">Cantidad *</label>
+      <input
+      type="number"
+      value={nuevaSolicitud.cantidad}
+      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, cantidad: e.target.value })}
+      className="w-full border rounded-xl p-2.5"
+      />
+      </div>
+      <div>
+      <label className="block text-sm font-semibold mb-1">Unidad</label>
+      <input
+      type="text"
+      value={nuevaSolicitud.unidad}
+      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, unidad: e.target.value })}
+      className="w-full border rounded-xl p-2.5"
+      />
+      </div>
+      </div>
+
+      <div>
+      <label className="block text-sm font-semibold mb-1">Creado por</label>
+      <input
+      type="text"
+      value={nuevaSolicitud.solicitado_por}
+      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, solicitado_por: e.target.value })}
+      className="w-full border rounded-xl p-2.5"
+      placeholder="Nombre de quien crea la solicitud"
+      />
+      </div>
+
+      <div>
+      <label className="block text-sm font-semibold mb-1">Notas (opcional)</label>
+      <textarea
+      value={nuevaSolicitud.notas}
+      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, notas: e.target.value })}
+      className="w-full border rounded-xl p-2.5 h-20"
+      placeholder="Especificaciones o comentarios..."
+      />
+      </div>
+      </div>
+
+      <div className="flex gap-3 mt-8">
+      <button
+      onClick={() => setShowNewModal(false)}
+      className="flex-1 py-3 rounded-xl border border-gray-300 hover:bg-gray-50"
+      >
+      Cancelar
+      </button>
+      <button
+      onClick={crearSolicitud}
+      className="flex-1 py-3 rounded-xl bg-blue-600 text-white hover:bg-blue-700"
+      >
+      Crear Solicitud
+      </button>
+      </div>
+      </div>
+      </div>
+    )}
+
     </div>
   );
 }

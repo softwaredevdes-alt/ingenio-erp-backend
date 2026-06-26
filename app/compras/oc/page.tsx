@@ -86,9 +86,29 @@ export default function OrdenesCompraPage() {
                 if (obraOrden !== obraFiltro) return false;
             }
 
-            // Filtro por Proveedor
-            if (proveedorFiltro) {
-                if (!orden.proveedor?.toLowerCase().includes(proveedorFiltro.toLowerCase())) return false;
+            // Filtro por Proveedor (campo específico)
+            if (proveedorFiltro.trim()) {
+                if (!orden.proveedor?.toLowerCase().includes(proveedorFiltro.toLowerCase().trim())) {
+                    return false;
+                }
+            }
+
+            // Filtro por Insumo / N° de Orden (campo "Buscar por Insumo")
+            if (searchText.trim()) {
+                const texto = searchText.toLowerCase().trim();
+                const coincideInsumo = (orden.solicitudes?.insumo || '').toLowerCase().includes(texto);
+                const coincideNumeroOC = (orden.numero_oc || '').toLowerCase().includes(texto);
+
+                if (!coincideInsumo && !coincideNumeroOC) {
+                    return false;
+                }
+            }
+
+            // Filtro por Número de Orden (campo específico "N° Orden")
+            if (numeroOcFiltro.trim()) {
+                if (!orden.numero_oc?.toLowerCase().includes(numeroOcFiltro.toLowerCase().trim())) {
+                    return false;
+                }
             }
 
             // Filtro por Fecha
@@ -98,23 +118,31 @@ export default function OrdenesCompraPage() {
                 if (fechaFin && fechaOrden > new Date(fechaFin)) return false;
             }
 
-            // Filtro por Número de Orden
-            if (searchText.trim()) {
-                const texto = searchText.toLowerCase();
-                return (
-                    (orden.numero_oc || '').toLowerCase().includes(texto) ||
-                    (orden.proveedor || '').toLowerCase().includes(texto) ||
-                    (orden.solicitudes?.insumo || '').toLowerCase().includes(texto)
-                );
-            }
-
-            // Filtro por Número de Orden
-            if (numeroOcFiltro.trim()) {
-                if (!orden.numero_oc?.toLowerCase().includes(numeroOcFiltro.toLowerCase())) return false;
-            }
             return true;
         });
-    }, [ordenes, estadoFiltro, obraFiltro, proveedorFiltro, fechaInicio, fechaFin, searchText]);
+    }, [
+        ordenes,
+        estadoFiltro,
+        obraFiltro,
+        proveedorFiltro,
+        searchText,
+        numeroOcFiltro,
+        fechaInicio,
+        fechaFin,
+    ]);
+
+    const generarNumeroOC = () => {
+        const now = new Date();
+
+        const year = now.getFullYear().toString().slice(-2);     // 26
+        const month = String(now.getMonth() + 1).padStart(2, '0'); // 06
+        const day = String(now.getDate()).padStart(2, '0');        // 25
+
+        // 4 dígitos aleatorios
+        const random = Math.floor(1000 + Math.random() * 9000);    // 4832
+
+        return `${year}${month}${day}-${random}`;
+    };
 
     const solicitudesDisponibles = useMemo(() => {
         if (!solicitudesAprobadas.length) return [];
@@ -376,16 +404,51 @@ export default function OrdenesCompraPage() {
             const getEstadoColor = (estado: string) => {
                 const est = (estado || '').toLowerCase().trim();
                 switch (est) {
-                    case 'borrador': return 'bg-gray-100 text-gray-700';
+                    case 'borrador': return 'bg-gray-100 text-gray-700 border border-gray-200';
                     case 'pendiente_aprobacion':
-                    case 'pendiente': return 'bg-yellow-100 text-yellow-700';
-                    case 'enviada': return 'bg-blue-100 text-blue-700';
-                    case 'parcialmente_recibida': return 'bg-orange-100 text-orange-700';
-                    case 'recibida': return 'bg-green-100 text-green-700';
-                    case 'cancelada': return 'bg-red-100 text-red-700';
-                    default: return 'bg-gray-100 text-gray-700';
+                    case 'pendiente': return 'bg-yellow-100 text-yellow-800 border border-yellow-200';
+                    case 'enviada': return 'bg-blue-100 text-blue-800 border border-blue-200';
+                    case 'parcialmente_recibida': return 'bg-orange-100 text-orange-800 border border-orange-200';
+                    case 'recibida': return 'bg-green-100 text-green-800 border border-green-200';
+                    case 'anulada':
+                    case 'cancelada': return 'bg-red-100 text-red-800 border border-red-200';
+                    default: return 'bg-gray-100 text-gray-700 border border-gray-200';
                 }
-            };
+              };
+
+              const getEstadoLabel = (estado: string) => {
+                  const est = (estado || '').toLowerCase().trim();
+
+                  switch (est) {
+                      case 'pendiente_aprobacion':
+                          return 'Pendiente';
+                      case 'parcialmente_recibida':
+                          return 'Parcial';
+                      case 'pendiente':
+                          return 'Pendiente';
+                      case 'enviada':
+                          return 'Enviada';
+                      case 'recibida':
+                          return 'Recibida';
+                      case 'anulada':
+                          return 'Anulada';
+                      case 'cancelada':
+                          return 'Cancelada';
+                      default:
+                          return estado;
+                  }
+              };
+
+              const getEstadoIcon = (estado: string) => {
+                  const est = (estado || '').toLowerCase();
+                  if (est.includes('recibida')) return '✅';
+                  if (est.includes('parcial')) return '⏳';
+                  if (est.includes('enviada')) return '📤';
+                  if (est.includes('pendiente')) return '⏳';
+                  if (est.includes('anulada') || est.includes('cancelada')) return '❌';
+                  return '📄';
+               };
+
 
                 const generarPDF = (oc: any) => {
                     import('jspdf').then(({ jsPDF }) => {
@@ -463,25 +526,53 @@ export default function OrdenesCompraPage() {
                 return (
                     <div className="p-8 max-w-7xl mx-auto">
                     {/* Encabezado */}
-                    <div className="mb-8">
-                    <Link href="/compras" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium mb-2">
-                    ← Volver al módulo de Compras
+                    <div className="mb-8 flex items-center justify-between">
+                    <Link href="/compras" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
+                    ← Volver a Compras
                     </Link>
-                    <div className="flex items-center justify-between">
-                    <div>
+
                     <h1 className="text-3xl font-bold text-gray-900">Órdenes de Compra</h1>
-                    <p className="text-gray-600 mt-1">Generar y gestionar Órdenes de Compra + PDF para Sigo</p>
-                    </div>
-                    </div>
+
+                    <Link href="/compras/entradas" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
+                    Ir a Entradas de Almacén →
+                    </Link>
                     </div>
 
-                    {/* Filtros y Tabla (mantengo tu estructura) */}
                     {/* Filtros */}
-                    <div className="bg-white rounded-2xl shadow p-4 mb-6">
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="bg-white rounded-2xl shadow p-6 mb-6">
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+                    <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Obra</label>
+                    <select
+                    value={obraFiltro}
+                    onChange={(e) => setObraFiltro(e.target.value)}
+                    className="w-full border rounded-xl p-3"
+                    >
+                    <option value="">Todas las obras</option>
+                    {obrasUnicas.map((obra, index) => (
+                        <option key={index} value={obra}>{obra}</option>
+                    ))}
+                    </select>
+                    </div>
+
+                    <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">N° Orden</label>
+                    <input
+                    type="text"
+                    placeholder="aammdd-..."
+                    value={numeroOcFiltro}
+                    onChange={(e) => setNumeroOcFiltro(e.target.value)}
+                    className="w-full border rounded-xl p-3"
+                    />
+                    </div>
+
                     <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
-                    <select value={estadoFiltro} onChange={(e) => setEstadoFiltro(e.target.value)} className="w-full border rounded-xl p-2.5">
+                    <select
+                    value={estadoFiltro}
+                    onChange={(e) => setEstadoFiltro(e.target.value)}
+                    className="w-full border rounded-xl p-3"
+                    >
                     <option value="todas">Todos</option>
                     <option value="pendiente">Pendiente</option>
                     <option value="enviada">Enviada</option>
@@ -490,59 +581,53 @@ export default function OrdenesCompraPage() {
                     <option value="anulada">Anulada</option>
                     </select>
                     </div>
-                    <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Obra</label>
-                    <select value={obraFiltro} onChange={(e) => setObraFiltro(e.target.value)} className="w-full border rounded-xl p-2.5">
-                    <option value="">Todas las obras</option>
-                    {obrasUnicas.map((obra, index) => (
-                        <option key={index} value={obra}>{obra}</option>
-                    ))}
-                    </select>
-                    </div>
 
-                    <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Buscar</label>
-                    <input
-                    type="text"
-                    placeholder="Buscar por Proveedor or Insumo..."
-                    value={searchText}
-                    onChange={(e) => setSearchText(e.target.value)}
-                    className="w-full border rounded-xl p-2.5"
-                    />
-                    </div>
-
-                    <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">N° Orden</label>
-                    <input
-                    type="text"
-                    placeholder="OC-2026-..."
-                    value={numeroOcFiltro}
-                    onChange={(e) => setNumeroOcFiltro(e.target.value)}
-                    className="w-full border rounded-xl p-2.5"
-                    />
-                    </div>
-
-                    <div className="md:col-span-2 grid grid-cols-2 gap-4">
                     <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Desde</label>
                     <input
                     type="date"
                     value={fechaInicio}
                     onChange={(e) => setFechaInicio(e.target.value)}
-                    className="w-full border rounded-xl p-2.5"
+                    className="w-full border rounded-xl p-3"
                     />
                     </div>
+
                     <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
                     <input
                     type="date"
                     value={fechaFin}
                     onChange={(e) => setFechaFin(e.target.value)}
-                    className="w-full border rounded-xl p-2.5"
+                    className="w-full border rounded-xl p-3"
                     />
                     </div>
                     </div>
 
+                    {/* Segunda fila */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
+                    <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Insumo</label>
+                    <input
+                    type="text"
+                    placeholder="Buscar por insumo..."
+                    value={searchText}
+                    onChange={(e) => setSearchText(e.target.value)}
+                    className="w-full border rounded-xl p-3"
+                    />
+                    </div>
+
+                    <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Proveedor</label>
+                    <input
+                    type="text"
+                    placeholder="Buscar proveedor..."
+                    value={proveedorFiltro}
+                    onChange={(e) => setProveedorFiltro(e.target.value)}
+                    className="w-full border rounded-xl p-3"
+                    />
+                    </div>
+
+                    <div className="flex items-end">
                     <button
                     onClick={() => {
                         setEstadoFiltro('todas');
@@ -553,11 +638,11 @@ export default function OrdenesCompraPage() {
                         setNumeroOcFiltro('');
                         setSearchText('');
                     }}
-                    className="px-4 py-2.5 text-sm border rounded-xl hover:bg-gray-100"
+                    className="w-full px-6 py-3 text-sm border rounded-xl hover:bg-gray-100"
                     >
                     Limpiar Filtros
                     </button>
-
+                    </div>
                     </div>
                     </div>
 
@@ -598,28 +683,31 @@ export default function OrdenesCompraPage() {
                                 <td className="px-6 py-4 text-sm text-center text-gray-700">
                                 {orden.cantidad || 0} {orden.solicitudes?.unidad || ''}
                                 </td>
-                                <td className="px-6 py-4 text-sm text-center">
-                                <div className="flex flex-col items-center">
+                                <td className="px-6 py-4 text-sm">
+                                <div className="flex items-center gap-3">
+                                <div className="flex-1">
+                                <div className="flex justify-between text-xs mb-1">
                                 <span className="font-medium text-green-600">{recibido}</span>
-                                {cantidadSolicitada > 0 && (
-                                    <div className="w-20 bg-gray-200 rounded-full h-1.5 mt-1">
-                                    <div
-                                    className="bg-green-500 h-1.5 rounded-full"
-                                    style={{ width: `${porcentaje}%` }}
-                                    />
-                                    </div>
-                                )}
+                                <span className="text-gray-500">{porcentaje}%</span>
+                                </div>
+                                <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div
+                                className="bg-green-500 h-2 rounded-full transition-all"
+                                style={{ width: `${porcentaje}%` }}
+                                />
+                                </div>
+                                </div>
                                 </div>
                                 </td>
                                 <td className="px-6 py-4 text-sm text-gray-800">{orden.proveedor}</td>
                                 <td className="px-6 py-4 text-sm text-right font-semibold text-gray-900">${Number(orden.total).toLocaleString('es-CO')}</td>
                                 <td className="px-6 py-4 text-center">
-                                <span className={`px-3 py-1 rounded-full text-xs font-medium ${getEstadoColor(orden.estado)}`}>
-                                {(orden.estado || 'pendiente').replace('_', ' ').toUpperCase()}
+                                <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${getEstadoColor(orden.estado)}`}>
+                                {getEstadoLabel(orden.estado)}
                                 </span>
                                 </td>
                                 <td className="px-6 py-4 text-center">
-                                <div className="flex justify-center gap-2 flex-wrap">
+                                <div className="flex justify-center gap-1.5 flex-wrap">
                                 {orden.estado !== 'anulada' && (
                                     <button
                                     onClick={() => {
@@ -627,19 +715,43 @@ export default function OrdenesCompraPage() {
                                         setNuevaEntrada({ cantidad_recibida: orden.cantidadFaltante?.toString() || '', recibido_por: '', observaciones: '' });
                                         setShowEntradaModal(true);
                                     }}
-                                    className="px-3 py-1.5 text-xs bg-orange-600 hover:bg-orange-700 text-white rounded-lg"
+                                    className="px-2.5 py-1 text-xs bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-lg transition-colors"
                                     >
                                     + Entrada
                                     </button>
                                 )}
-                                <button onClick={() => verHistorialDeOrden(orden)} className="px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg">📋 Historial</button>
+
+                                <button
+                                onClick={() => verHistorialDeOrden(orden)}
+                                className="px-2.5 py-1 text-xs bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-lg transition-colors"
+                                >
+                                Historial
+                                </button>
+
                                 {(orden.estado === 'pendiente' || orden.estado === 'parcialmente_recibida') && (
-                                    <button onClick={() => marcarComoEnviada(orden)} className="px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded-lg">Enviar</button>
+                                    <button
+                                    onClick={() => marcarComoEnviada(orden)}
+                                    className="px-2.5 py-1 text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg transition-colors"
+                                    >
+                                    Enviar
+                                    </button>
                                 )}
+
                                 {orden.estado !== 'anulada' && orden.estado !== 'cancelada' && (
-                                    <button onClick={() => cancelarOrden(orden)} className="px-3 py-1.5 text-xs bg-red-600 hover:bg-red-700 text-white rounded-lg">Cancelar</button>
+                                    <button
+                                    onClick={() => cancelarOrden(orden)}
+                                    className="px-2.5 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors"
+                                    >
+                                    Cancelar
+                                    </button>
                                 )}
-                                <button onClick={() => generarPDF(orden)} className="px-3 py-1.5 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded-lg">📄 PDF</button>
+
+                                <button
+                                onClick={() => generarPDF(orden)}
+                                className="px-2.5 py-1 text-xs bg-purple-100 hover:bg-purple-200 text-purple-700 rounded-lg transition-colors"
+                                >
+                                PDF
+                                </button>
                                 </div>
                                 </td>
                                 </tr>
