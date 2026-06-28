@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
+import { generarNumeroOC } from '@/lib/utils';
 
 interface Solicitud {
   id: number;
@@ -324,25 +325,36 @@ export default function CotizacionesPage() {
   };
 
   const eliminarCotizacion = async (cot: Cotizacion) => {
-    const isSelected = cot.estado === 'seleccionada';
-
-    let mensaje = `¿Eliminar la cotización de "${cot.proveedor}"?`;
-    if (isSelected) {
-      mensaje = `⚠️ Esta cotización ya está SELECCIONADA y tiene una Orden de Compra asociada.\n\n¿Estás seguro de eliminarla? Esto eliminará la OC correspondiente.`;
+    // No permitir eliminar cotizaciones que ya fueron seleccionadas
+    if (cot.estado === 'seleccionada') {
+      alert('No se puede eliminar una cotización que ya ha sido seleccionada y tiene una Orden de Compra asociada.');
+      return;
     }
 
-    if (!confirm(mensaje)) return;
+    if (!confirm(`¿Eliminar la cotización de "${cot.proveedor}"?`)) return;
 
     try {
-      // Eliminar solo la OC asociada a esta cotización
-      if (isSelected) {
-        await supabase
-        .from('ordenes_compra')
-        .delete()
-        .eq('cotizacion_id', cot.id);
+      // Verificar si tiene una OC asociada y si esa OC ya tiene entradas
+      const { data: ordenes } = await supabase
+      .from('ordenes_compra')
+      .select('id')
+      .eq('cotizacion_id', cot.id);
+
+      if (ordenes && ordenes.length > 0) {
+        for (const orden of ordenes) {
+          const cantidadRecibida = await calcularCantidadRecibida(orden.id);
+          if (cantidadRecibida > 0) {
+            alert(
+              'No se puede eliminar esta cotización.\n\n' +
+              'La Orden de Compra asociada ya tiene material recibido en almacén.\n' +
+              'Primero debe gestionar las devoluciones o ajustes correspondientes.'
+            );
+            return;
+          }
+        }
       }
 
-      // Eliminar la cotización
+      // Si llegó hasta aquí, es seguro eliminar
       await supabase.from('cotizaciones').delete().eq('id', cot.id);
 
       alert('Cotización eliminada correctamente');
@@ -351,10 +363,9 @@ export default function CotizacionesPage() {
         const cotis = await cargarCotizaciones(selectedSolicitud.id);
         setCotizaciones(cotis);
       }
+
       cargarSolicitudes();
 
-      // MSG to the user: Recargar página de OC
-      alert('Cambios guardados. Por favor recarga la página de Órdenes de Compra para ver las actualizaciones.');
     } catch (error) {
       console.error(error);
       alert('Error al eliminar la cotización');
@@ -411,7 +422,7 @@ export default function CotizacionesPage() {
       const total = Number(cotizacion.precio_unitario) * cantidadUsada;
 
       // Genera Numero de Orden
-      const numeroOC = generarNumeroOC();
+      const numeroOC = await generarNumeroOC();
 
       const { error: ocError } = await supabase.from('ordenes_compra').insert({
         solicitud_id: cotizacion.solicitud_id,
@@ -741,12 +752,14 @@ export default function CotizacionesPage() {
               >
               Editar
               </button>
-              <button
-              onClick={() => eliminarCotizacion(cot)}
-              className="px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-colors"
-              >
-              Eliminar
-              </button>
+              {cot.estado !== 'seleccionada' && (
+                <button
+                onClick={() => eliminarCotizacion(cot)}
+                className="px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-colors"
+                >
+                Eliminar
+                </button>
+              )}
               </div>
 
               {cot.observaciones && (

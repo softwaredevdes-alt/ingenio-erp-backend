@@ -24,7 +24,11 @@ export default function SolicitudesPage() {
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedSolicitud, setSelectedSolicitud] = useState<Solicitud | null>(null);
-  const [showNewModal, setShowNewModal] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+
+  // Estados para Edición
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingSolicitud, setEditingSolicitud] = useState<Solicitud | null>(null);
 
   // Filtros
   const [selectedObraId, setSelectedObraId] = useState<string | null>(null);
@@ -34,6 +38,7 @@ export default function SolicitudesPage() {
   const [searchInput, setSearchInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [solicitanteFiltro, setSolicitanteFiltro] = useState('');
+
   const limpiarFiltros = () => {
     setEstadoFiltro('todas');
     setSelectedObraId(null);
@@ -51,13 +56,12 @@ export default function SolicitudesPage() {
   }, [searchInput]);
 
   // Modal crear
-  const [showModal, setShowModal] = useState(false);
   const [nuevaSolicitud, setNuevaSolicitud] = useState({
     obra_id: '',
     insumo: '',
     cantidad: '',
     unidad: 'Und',
-    solicitado_por: '',   // ← Nuevo campo
+    solicitado_por: '',
     notas: '',
   });
 
@@ -84,7 +88,8 @@ export default function SolicitudesPage() {
       }
 
       if (estadoFiltro !== 'todas') {
-        query = query.eq('estado', estadoFiltro);
+        const estadoFiltroLower = estadoFiltro.toLowerCase().trim();
+        query = query.eq('estado', estadoFiltroLower);
       }
 
       const { data, error } = await query;
@@ -92,7 +97,6 @@ export default function SolicitudesPage() {
 
       let filtered = data || [];
 
-      // Filtro por Insumo / Notas / Solicitado por
       if (searchTerm.trim() !== '') {
         const texto = searchTerm.toLowerCase().trim();
         filtered = filtered.filter((s: any) =>
@@ -102,7 +106,6 @@ export default function SolicitudesPage() {
         );
       }
 
-      // Filtro por Proveedor
       if (solicitanteFiltro.trim() !== '') {
         const texto = solicitanteFiltro.toLowerCase().trim();
         filtered = filtered.filter((s: any) =>
@@ -110,7 +113,6 @@ export default function SolicitudesPage() {
         );
       }
 
-      // Filtro por Fecha
       if (fechaInicio || fechaFin) {
         filtered = filtered.filter((s: any) => {
           const fecha = new Date(s.fecha_solicitud);
@@ -147,7 +149,7 @@ export default function SolicitudesPage() {
         unidad: nuevaSolicitud.unidad,
         estado: 'pendiente',
         fecha_solicitud: new Date().toISOString(),
-        solicitado_por: nuevaSolicitud.solicitado_por || null, // ← Guardamos el creador
+        solicitado_por: nuevaSolicitud.solicitado_por || null,
         notas: nuevaSolicitud.notas || null,
       });
 
@@ -170,6 +172,13 @@ export default function SolicitudesPage() {
     }
   };
 
+  // Función para abrir solicitud (ahora abre el modal de edición)
+  const abrirSolicitud = (solicitud: Solicitud) => {
+    setEditingSolicitud(solicitud);
+    setShowEditModal(true);
+  };
+
+  // Rechazar solicitud
   const rechazarSolicitud = async (id: number, estado: string) => {
     if (estado === 'rechazada') {
       alert('Esta solicitud ya está rechazada.');
@@ -181,6 +190,38 @@ export default function SolicitudesPage() {
       return;
     }
 
+    if (estado === 'recibida') {
+      alert('No se puede rechazar una solicitud que ya tiene material recibido en almacén.');
+      return;
+    }
+
+    // === VALIDACIÓN: Verificar si tiene Órdenes de Compra con entradas ===
+    try {
+      const { data: ordenesRelacionadas } = await supabase
+      .from('ordenes_compra')
+      .select('id')
+      .eq('solicitud_id', id);
+
+      if (ordenesRelacionadas && ordenesRelacionadas.length > 0) {
+        for (const orden of ordenesRelacionadas) {
+          const cantidadRecibida = await calcularCantidadRecibida(orden.id);
+          if (cantidadRecibida > 0) {
+            alert(
+              'No se puede rechazar esta solicitud.\n\n' +
+              'Ya existe una Orden de Compra con material recibido en almacén.\n' +
+              'Primero debe gestionar las devoluciones o ajustes correspondientes.'
+            );
+            return;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error verificando órdenes relacionadas:', error);
+      alert('Error al verificar el estado de la solicitud.');
+      return;
+    }
+
+    // Si pasó todas las validaciones, pedimos confirmación
     if (!confirm('¿Rechazar esta solicitud?')) return;
 
     try {
@@ -200,7 +241,9 @@ export default function SolicitudesPage() {
   };
 
   const getEstadoColor = (estado: string) => {
-    switch (estado) {
+    const est = (estado || '').toLowerCase().trim();
+
+    switch (est) {
       case 'pendiente':
         return 'bg-yellow-100 text-yellow-800 border border-yellow-200';
       case 'cotizada':
@@ -211,6 +254,17 @@ export default function SolicitudesPage() {
         return 'bg-red-100 text-red-800 border border-red-200';
       default:
         return 'bg-gray-100 text-gray-700 border border-gray-200';
+    }
+  };
+
+  const getEstadoLabel = (estado: string) => {
+    const est = (estado || '').toLowerCase().trim();
+    switch (est) {
+      case 'pendiente': return 'Pendiente';
+      case 'cotizada': return 'Cotizada';
+      case 'aprobada': return 'Aprobada';
+      case 'rechazada': return 'Rechazada';
+      default: return estado;
     }
   };
 
@@ -283,7 +337,7 @@ export default function SolicitudesPage() {
 
     <div className="flex items-end">
     <button
-    onClick={() => setShowNewModal(true)}
+    onClick={() => setShowModal(true)}
     className="w-full bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-xl font-medium"
     >
     + Nueva Solicitud
@@ -291,7 +345,7 @@ export default function SolicitudesPage() {
     </div>
     </div>
 
-    {/* Segunda fila */}
+    {/* Segunda fila de filtros */}
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
     <div>
     <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Insumo</label>
@@ -326,7 +380,6 @@ export default function SolicitudesPage() {
     </div>
     </div>
 
-
     {/* Tabla */}
     {loading ? (
       <p className="text-center py-10 text-gray-500">Cargando solicitudes...</p>
@@ -351,44 +404,62 @@ export default function SolicitudesPage() {
       </tr>
       </thead>
       <tbody className="divide-y">
-      {solicitudes.length === 0 ? (
-        <tr><td colSpan={7} className="px-6 py-8 text-center text-gray-500">No se encontraron solicitudes.</td></tr>
-      ) : (
-        solicitudes.map((sol) => (
-          <tr
-          key={sol.id}
-          onClick={() => abrirSolicitud(sol)}
-          className={`cursor-pointer hover:bg-gray-50 ${selectedSolicitud?.id === sol.id ? 'bg-blue-50' : ''}`}
-          >
-          <td className="px-6 py-4 text-sm text-gray-600">{new Date(sol.fecha_solicitud).toLocaleDateString('es-CO')}</td>
-          <td className="px-6 py-4 text-sm text-gray-800">{sol.obras?.nombre || '—'}</td>
-          <td className="px-6 py-4 text-sm text-gray-800">{sol.insumo}</td>
-          <td className="px-6 py-4 text-sm text-center text-gray-700">{sol.cantidad} {sol.unidad}</td>
-          <td className="px-6 py-4 text-sm text-gray-600">{sol.solicitado_por || '—'}</td>
-          <td className="px-6 py-4 text-center">
-          <span className={`px-3 py-1 rounded-full text-xs font-medium ${getEstadoColor(sol.estado)}`}>
-          {sol.estado.charAt(0).toUpperCase() + sol.estado.slice(1)}
-          </span>
-          </td>
-          <td className="px-6 py-4 text-center">
-          <div className="flex justify-center gap-2">
-          <button
-          onClick={(e) => {
-            e.stopPropagation();
-            rechazarSolicitud(sol.id, sol.estado);
-          }}
-          className="px-3 py-1 text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 hover:border-red-300 rounded-lg transition-all"
-          >
-          x Rechazar
-          </button>
+      {solicitudes.map((sol) => (
+        <tr
+        key={sol.id}
+        className="hover:bg-gray-50"
+        >
+        <td className="px-6 py-4 text-sm text-gray-600">
+        {new Date(sol.fecha_solicitud).toLocaleDateString('es-CO')}
+        </td>
+        <td className="px-6 py-4 text-sm text-gray-800">{sol.obras?.nombre || '—'}</td>
+        <td className="px-6 py-4 text-sm text-gray-800">{sol.insumo}</td>
+        <td className="px-6 py-4 text-sm text-center text-gray-700">
+        {sol.cantidad} {sol.unidad}
+        </td>
+        <td className="px-6 py-4 text-sm text-gray-600">{sol.solicitado_por || '—'}</td>
+        <td className="px-6 py-4 text-center">
+        <span className={`px-3 py-1 rounded-full text-xs font-medium ${getEstadoColor(sol.estado)}`}>
+        {getEstadoLabel(sol.estado)}
+        </span>
+        </td>
+        <td className="px-6 py-4 text-center">
+        <div className="flex justify-center gap-2">
+
+        {/* Editar - Visible en pendiente, cotizada y rechazada */}
+        {(sol.estado === 'pendiente' ||
+          sol.estado === 'cotizada' ||
+          sol.estado === 'rechazada') && (
+            <button
+            onClick={(e) => {
+              e.stopPropagation();
+              abrirSolicitud(sol);
+            }}
+            className="px-3 py-1 text-xs font-medium border border-gray-300 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+            Editar
+            </button>
+          )}
+
+          {/* Rechazar - Solo visible en pendiente y cotizada */}
+          {(sol.estado === 'pendiente' || sol.estado === 'cotizada') && (
+            <button
+            onClick={(e) => {
+              e.stopPropagation();
+              rechazarSolicitud(sol.id, sol.estado);
+            }}
+            className="px-3 py-1 text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 hover:border-red-300 rounded-lg transition-all"
+            >
+            ✕ Rechazar
+            </button>
+          )}
+
           </div>
           </td>
-          </tr>
-        ))
-      )}
+        </tr>
+      ))}
       </tbody>
       </table>
-
       </div>
     )}
 
@@ -399,7 +470,6 @@ export default function SolicitudesPage() {
       <h2 className="text-2xl font-bold mb-6">Nueva Solicitud</h2>
 
       <div className="space-y-4">
-      {/* Obra */}
       <div>
       <label className="block text-sm font-semibold mb-1">Obra *</label>
       <select
@@ -414,7 +484,6 @@ export default function SolicitudesPage() {
       </select>
       </div>
 
-      {/* Insumo */}
       <div>
       <label className="block text-sm font-semibold mb-1">Insumo / Material *</label>
       <input
@@ -426,7 +495,6 @@ export default function SolicitudesPage() {
       />
       </div>
 
-      {/* Cantidad + Unidad */}
       <div className="grid grid-cols-2 gap-4">
       <div>
       <label className="block text-sm font-semibold mb-1">Cantidad *</label>
@@ -448,7 +516,6 @@ export default function SolicitudesPage() {
       </div>
       </div>
 
-      {/* === NUEVO CAMPO: Creado por === */}
       <div>
       <label className="block text-sm font-semibold mb-1">Creado por</label>
       <input
@@ -460,7 +527,6 @@ export default function SolicitudesPage() {
       />
       </div>
 
-      {/* Notas */}
       <div>
       <label className="block text-sm font-semibold mb-1">Notas (opcional)</label>
       <textarea
@@ -490,18 +556,19 @@ export default function SolicitudesPage() {
       </div>
     )}
 
-    {/* Modal Crear Solicitud */}
-    {showNewModal && (
+    {/* Modal Editar Solicitud */}
+    {showEditModal && editingSolicitud && (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl p-8 w-full max-w-md">
-      <h2 className="text-2xl font-bold mb-6">Nueva Solicitud</h2>
+      <h2 className="text-2xl font-bold mb-6">Editar Solicitud</h2>
 
       <div className="space-y-4">
+      {/* Obra */}
       <div>
       <label className="block text-sm font-semibold mb-1">Obra *</label>
       <select
-      value={nuevaSolicitud.obra_id}
-      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, obra_id: e.target.value })}
+      value={editingSolicitud.obra_id}
+      onChange={(e) => setEditingSolicitud({ ...editingSolicitud, obra_id: e.target.value })}
       className="w-full border rounded-xl p-2.5"
       >
       <option value="">Selecciona una obra</option>
@@ -511,24 +578,25 @@ export default function SolicitudesPage() {
       </select>
       </div>
 
+      {/* Insumo */}
       <div>
       <label className="block text-sm font-semibold mb-1">Insumo / Material *</label>
       <input
       type="text"
-      value={nuevaSolicitud.insumo}
-      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, insumo: e.target.value })}
+      value={editingSolicitud.insumo}
+      onChange={(e) => setEditingSolicitud({ ...editingSolicitud, insumo: e.target.value })}
       className="w-full border rounded-xl p-2.5"
-      placeholder="Ej: Cemento gris 50kg"
       />
       </div>
 
+      {/* Cantidad + Unidad */}
       <div className="grid grid-cols-2 gap-4">
       <div>
       <label className="block text-sm font-semibold mb-1">Cantidad *</label>
       <input
       type="number"
-      value={nuevaSolicitud.cantidad}
-      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, cantidad: e.target.value })}
+      value={editingSolicitud.cantidad}
+      onChange={(e) => setEditingSolicitud({ ...editingSolicitud, cantidad: Number(e.target.value) })}
       className="w-full border rounded-xl p-2.5"
       />
       </div>
@@ -536,53 +604,111 @@ export default function SolicitudesPage() {
       <label className="block text-sm font-semibold mb-1">Unidad</label>
       <input
       type="text"
-      value={nuevaSolicitud.unidad}
-      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, unidad: e.target.value })}
+      value={editingSolicitud.unidad || ''}
+      onChange={(e) => setEditingSolicitud({ ...editingSolicitud, unidad: e.target.value })}
       className="w-full border rounded-xl p-2.5"
       />
       </div>
       </div>
 
+      {/* Solicitado por */}
       <div>
-      <label className="block text-sm font-semibold mb-1">Creado por</label>
+      <label className="block text-sm font-semibold mb-1">Solicitado por</label>
       <input
       type="text"
-      value={nuevaSolicitud.solicitado_por}
-      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, solicitado_por: e.target.value })}
+      value={editingSolicitud.solicitado_por || ''}
+      onChange={(e) => setEditingSolicitud({ ...editingSolicitud, solicitado_por: e.target.value })}
       className="w-full border rounded-xl p-2.5"
-      placeholder="Nombre de quien crea la solicitud"
       />
       </div>
 
+      {/* Notas */}
       <div>
-      <label className="block text-sm font-semibold mb-1">Notas (opcional)</label>
+      <label className="block text-sm font-semibold mb-1">Notas</label>
       <textarea
-      value={nuevaSolicitud.notas}
-      onChange={(e) => setNuevaSolicitud({ ...nuevaSolicitud, notas: e.target.value })}
+      value={editingSolicitud.notas || ''}
+      onChange={(e) => setEditingSolicitud({ ...editingSolicitud, notas: e.target.value })}
       className="w-full border rounded-xl p-2.5 h-20"
-      placeholder="Especificaciones o comentarios..."
       />
+      </div>
+
+      {/* Estado Actual */}
+      <div>
+      <label className="block text-sm font-semibold mb-1">Estado Actual</label>
+      <div>
+      <span className={`px-3 py-1 rounded-full text-xs font-medium ${getEstadoColor(editingSolicitud.estado)}`}>
+      {editingSolicitud.estado.charAt(0).toUpperCase() + editingSolicitud.estado.slice(1)}
+      </span>
       </div>
       </div>
 
+      {/* Botón Recuperar (solo si está rechazada) */}
+      {editingSolicitud.estado === 'rechazada' && (
+        <div className="pt-2">
+        <button
+        type="button"
+        onClick={() => {
+          setEditingSolicitud({ ...editingSolicitud, estado: 'pendiente' });
+        }}
+        className="w-full py-2.5 text-sm font-medium bg-yellow-500 hover:bg-yellow-600 text-white rounded-xl transition-colors"
+        >
+        Recuperar Solicitud (Volver a Pendiente)
+        </button>
+        <p className="text-xs text-gray-500 mt-1 text-center">
+        Esto permitirá que la solicitud vuelva a estar disponible para cotizar.
+        </p>
+        </div>
+      )}
+      </div>
+
+      {/* Botones de acción */}
       <div className="flex gap-3 mt-8">
       <button
-      onClick={() => setShowNewModal(false)}
-      className="flex-1 py-3 rounded-xl border border-gray-300 hover:bg-gray-50"
+      onClick={() => {
+        setShowEditModal(false);
+        setEditingSolicitud(null);
+      }}
+      className="flex-1 py-3 rounded-xl border"
       >
       Cancelar
       </button>
       <button
-      onClick={crearSolicitud}
-      className="flex-1 py-3 rounded-xl bg-blue-600 text-white hover:bg-blue-700"
+      onClick={async () => {
+        if (!editingSolicitud) return;
+
+        try {
+          const { error } = await supabase
+          .from('solicitudes')
+          .update({
+            obra_id: editingSolicitud.obra_id,
+            insumo: editingSolicitud.insumo,
+            cantidad: editingSolicitud.cantidad,
+            unidad: editingSolicitud.unidad,
+            solicitado_por: editingSolicitud.solicitado_por,
+            notas: editingSolicitud.notas,
+            estado: editingSolicitud.estado,
+          })
+          .eq('id', editingSolicitud.id);
+
+          if (error) throw error;
+
+          alert('Solicitud actualizada correctamente');
+          setShowEditModal(false);
+          setEditingSolicitud(null);
+          cargarSolicitudes();
+        } catch (error) {
+          console.error(error);
+          alert('Error al actualizar la solicitud');
+        }
+      }}
+      className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-medium"
       >
-      Crear Solicitud
+      Guardar Cambios
       </button>
       </div>
       </div>
       </div>
     )}
-
     </div>
   );
 }

@@ -189,6 +189,7 @@ export default function EntradasAlmacenPage() {
     }
 
     const cantidad = Number(nuevaEntrada.cantidad_recibida);
+
     if (cantidad <= 0) {
       alert('La cantidad debe ser mayor a 0');
       return;
@@ -200,7 +201,7 @@ export default function EntradasAlmacenPage() {
     }
 
     try {
-      // 1. Registrar entrada
+      // 1. Registrar la entrada en entradas_almacen
       const { error: entradaError } = await supabase.from('entradas_almacen').insert({
         orden_compra_id: ordenSeleccionada.id,
         cantidad_recibida: cantidad,
@@ -213,12 +214,14 @@ export default function EntradasAlmacenPage() {
 
       if (entradaError) throw entradaError;
 
-      // 2. Actualizar inventario
+      // 2. Preparar datos para actualizar inventario y solicitud
       const insumo = ordenSeleccionada.solicitudes?.insumo;
       const obraId = ordenSeleccionada.solicitudes?.obra_id;
       const unidad = ordenSeleccionada.solicitudes?.unidad || 'UND';
       const ubicacion = ordenSeleccionada.solicitudes?.ubicacion_almacen || null;
+      const numeroOrden = ordenSeleccionada.numero_oc;
 
+      // 3. Actualizar o crear registro en inventario
       if (insumo && obraId) {
         const { data: inventarioExistente } = await supabase
         .from('inventario')
@@ -228,47 +231,68 @@ export default function EntradasAlmacenPage() {
         .maybeSingle();
 
         if (inventarioExistente) {
-          // Actualizar
+          // Actualizar registro existente
           await supabase
           .from('inventario')
           .update({
             cantidad: Number(inventarioExistente.cantidad) + cantidad,
-                  ubicacion_almacen: ubicacion || inventarioExistente.ubicacion_almacen,
-                  updated_at: new Date().toISOString()
+            ubicacion_almacen: ubicacion || inventarioExistente.ubicacion_almacen,
+            ultima_orden_compra: numeroOrden,
+            updated_at: new Date().toISOString()
           })
           .eq('id', inventarioExistente.id);
         } else {
-          // Crear nuevo
+          // Crear nuevo registro
           await supabase.from('inventario').insert({
             insumo: insumo,
             obra_id: obraId,
             cantidad: cantidad,
             unidad: unidad,
             ubicacion_almacen: ubicacion,
+            ultima_orden_compra: numeroOrden,
             updated_at: new Date().toISOString()
           });
         }
       }
 
-      // 3. Verificar si completó la orden
+      // 4. Actualizar también la ubicación en la solicitud (para que se vea en Entradas)
+      if (ordenSeleccionada.solicitud_id && ubicacion) {
+        await supabase
+        .from('solicitudes')
+        .update({ ubicacion_almacen: ubicacion })
+        .eq('id', ordenSeleccionada.solicitud_id);
+      }
+
+      // 5. Verificar si se completó la orden
       const nuevaCantidadRecibida = ordenSeleccionada.cantidadRecibida + cantidad;
       const cantidadTotal = ordenSeleccionada.cantidad || ordenSeleccionada.solicitudes?.cantidad || 0;
       const seCompleto = nuevaCantidadRecibida >= cantidadTotal;
 
       if (seCompleto) {
+        // Actualizar estado de la Orden
         await supabase
         .from('ordenes_compra')
         .update({ estado: 'recibida' })
         .eq('id', ordenSeleccionada.id);
+
+        // Actualizar estado de la Solicitud
+        if (ordenSeleccionada.solicitud_id) {
+          await supabase
+          .from('solicitudes')
+          .update({ estado: 'recibida' })
+          .eq('id', ordenSeleccionada.solicitud_id);
+        }
 
         alert('✅ ¡Orden completada!\nEl material ha sido recibido en su totalidad.');
       } else {
         alert('Entrada registrada correctamente');
       }
 
+      // Cerrar modal y recargar
       setShowEntradaModal(false);
       setNuevaEntrada({ cantidad_recibida: '', recibido_por: '', observaciones: '' });
       cargarOrdenes();
+
     } catch (error) {
       console.error(error);
       alert('Error al registrar entrada');

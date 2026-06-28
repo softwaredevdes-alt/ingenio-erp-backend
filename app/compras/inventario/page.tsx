@@ -3,6 +3,8 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 export default function InventarioPage() {
     const [inventario, setInventario] = useState<any[]>([]);
@@ -160,6 +162,58 @@ export default function InventarioPage() {
         }
     };
 
+    // =============================================
+    // Exportar Kardex a PDF
+    // =============================================
+    const exportarKardexPDF = async (item: any) => {
+        // Traer historial de movimientos
+        const { data: movimientos, error } = await supabase
+        .from('entradas_almacen')
+        .select('*')
+        .eq('insumo', item.insumo)
+        .order('fecha_entrada', { ascending: false });
+
+        if (error) {
+            alert('Error al obtener el historial');
+            return;
+        }
+
+        const doc = new jsPDF();
+        const fechaActual = new Date().toLocaleDateString('es-CO');
+
+        // Título
+        doc.setFontSize(18);
+        doc.text('KARDEX - HISTORIAL DE INVENTARIO', 14, 20);
+
+        // Información del material
+        doc.setFontSize(12);
+        doc.text(`Insumo: ${item.insumo}`, 14, 30);
+        doc.text(`Obra: ${item.obras?.nombre || '—'}`, 14, 36);
+        doc.text(`Cantidad Actual: ${item.cantidad} ${item.unidad}`, 14, 42);
+        doc.text(`Ubicación: ${item.ubicacion_almacen || '—'}`, 14, 48);
+        doc.text(`Última Orden: ${item.ultima_orden_compra || '—'}`, 14, 54);
+        doc.text(`Fecha de generación: ${fechaActual}`, 14, 60);
+
+        // Tabla de movimientos
+        const tableData = (movimientos || []).map((mov: any) => [
+            new Date(mov.fecha_entrada).toLocaleDateString('es-CO'),
+                                                  `+${mov.cantidad_recibida} ${mov.unidad}`,
+                                                  mov.recibido_por || '—',
+                                                  mov.observaciones || '—'
+        ]);
+
+        autoTable(doc, {
+            startY: 70,
+            head: [['Fecha', 'Cantidad', 'Recibido por', 'Observaciones']],
+            body: tableData,
+            styles: { fontSize: 10 },
+            headStyles: { fillColor: [41, 128, 185] },
+        });
+
+        // Guardar PDF
+        doc.save(`Kardex_${item.insumo.replace(/\s+/g, '_')}.pdf`);
+    };
+
     return (
         <div className="p-8 max-w-7xl mx-auto">
         {/* Encabezado */}
@@ -225,6 +279,7 @@ export default function InventarioPage() {
             <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Obra</th>
             <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Cantidad</th>
             <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Ubicación</th>
+            <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Última Orden</th>
             <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Última Actualización</th>
             <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Acciones</th>
             </tr>
@@ -257,22 +312,45 @@ export default function InventarioPage() {
                     <td className="px-6 py-4 text-sm text-gray-600">
                     {item.ubicacion_almacen || <span className="text-gray-400 italic">Sin ubicación</span>}
                     </td>
+                    <td className="px-6 py-4 text-sm text-gray-700">
+                    {item.ultima_orden_compra ? (
+                        <span className="font-mono text-blue-600">{item.ultima_orden_compra}</span>
+                    ) : (
+                        <span className="text-gray-400 italic">—</span>
+                    )}
+                    </td>
                     <td className="px-6 py-4 text-center text-sm text-gray-500">
                     {new Date(item.updated_at).toLocaleDateString('es-CO')}
                     </td>
                     <td className="px-6 py-4 text-center">
+                    <div className="flex justify-center items-center gap-2">
+                    {/* Ver Kardex */}
                     <button
                     onClick={() => verKardex(item)}
-                    className="px-4 py-1.5 text-sm border border-gray-300 hover:bg-gray-100 rounded-lg"
+                    className="px-3 py-1 text-xs font-medium border border-blue-300 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    title="Ver historial de movimientos"
                     >
-                    Ver Kardex
+                    Kardex
                     </button>
+
+                    {/* Ajustar Stock */}
                     <button
                     onClick={() => abrirAjusteStock(item)}
-                    className="px-3 py-1.5 text-xs border border-blue-300 text-blue-600 hover:bg-blue-50 rounded-lg"
+                    className="px-3 py-1 text-xs font-medium border border-orange-300 text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
+                    title="Ajustar cantidad manualmente"
                     >
-                    Ajustar Stock
+                    Ajustar
                     </button>
+
+                    {/* Exportar PDF */}
+                    <button
+                    onClick={() => exportarKardexPDF(item)}
+                    className="px-3 py-1 text-xs font-medium border border-gray-300 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    title="Exportar historial a PDF"
+                    >
+                    PDF
+                    </button>
+                    </div>
                     </td>
                     </tr>
                 ))
@@ -303,21 +381,31 @@ export default function InventarioPage() {
             </div>
 
             {/* Resumen */}
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-white border rounded-xl p-3">
             <p className="text-xs text-gray-500">Stock Actual</p>
             <p className="text-2xl font-bold text-gray-900">
             {materialSeleccionado.cantidad} {materialSeleccionado.unidad}
             </p>
             </div>
+
             <div className="bg-white border rounded-xl p-3">
             <p className="text-xs text-gray-500">Total de Entradas</p>
             <p className="text-2xl font-bold text-blue-600">{kardexData.length}</p>
             </div>
+
             <div className="bg-white border rounded-xl p-3">
             <p className="text-xs text-gray-500">Total Recibido</p>
             <p className="text-2xl font-bold text-green-600">
             {kardexData.reduce((sum, item) => sum + Number(item.cantidad_recibida || 0), 0)} {materialSeleccionado.unidad}
+            </p>
+            </div>
+
+            {/* === NUEVO: Última Orden === */}
+            <div className="bg-white border rounded-xl p-3">
+            <p className="text-xs text-gray-500">Última Orden</p>
+            <p className="text-lg font-bold text-blue-600 font-mono">
+            {materialSeleccionado.ultima_orden_compra || '—'}
             </p>
             </div>
             </div>
