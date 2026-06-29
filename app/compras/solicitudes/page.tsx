@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 
 interface Solicitud {
   id: number;
@@ -21,7 +22,9 @@ interface Solicitud {
 
 export default function SolicitudesPage() {
   const [obras, setObras] = useState<any[]>([]);
+  const [obraActual, setObraActual] = useState<{ id: string; nombre: string } | null>(null);
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
+  const [cotizacionesResumen, setCotizacionesResumen] = useState<Record<number, { cotizado: number; pendiente: number }>>({});
   const [loading, setLoading] = useState(true);
   const [selectedSolicitud, setSelectedSolicitud] = useState<Solicitud | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -38,6 +41,30 @@ export default function SolicitudesPage() {
   const [searchInput, setSearchInput] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [solicitanteFiltro, setSolicitanteFiltro] = useState('');
+
+  // Preseleccionar obra desde la URL (cuando vienes desde la página de Obras)
+  const searchParams = useSearchParams();
+
+  useEffect(() => {
+    const obraIdFromUrl = searchParams.get('obra_id');
+
+    if (obraIdFromUrl) {
+      // Preseleccionar la obra en el formulario
+      setNuevaSolicitud(prev => ({
+        ...prev,
+        obra_id: obraIdFromUrl
+      }));
+
+      // Buscar el nombre de la obra para mostrar el botón de volver
+      const obraEncontrada = obras.find(o => o.id === obraIdFromUrl);
+      if (obraEncontrada) {
+        setObraActual(obraEncontrada);
+      }
+
+      // Abrir el modal automáticamente
+      setShowModal(true);
+    }
+  }, [searchParams, obras]);
 
   const limpiarFiltros = () => {
     setEstadoFiltro('todas');
@@ -123,11 +150,31 @@ export default function SolicitudesPage() {
       }
 
       setSolicitudes(filtered);
+      cargarResumenCotizaciones();
     } catch (error) {
       console.error('Error cargando solicitudes:', error);
     } finally {
       setLoading(false);
     }
+  };
+
+  const cargarResumenCotizaciones = async () => {
+    const { data: cotizacionesData, error } = await supabase
+    .from('cotizaciones')
+    .select('solicitud_id, cantidad');
+
+    if (error) {
+      console.error('Error cargando cotizaciones:', error);
+      return;
+    }
+
+    const resumen: Record<number, number> = {};
+
+    cotizacionesData?.forEach((cot: any) => {
+      resumen[cot.solicitud_id] = (resumen[cot.solicitud_id] || 0) + Number(cot.cantidad);
+    });
+
+    setCotizacionesResumen(resumen); // Ahora solo guardamos la cantidad cotizada
   };
 
   useEffect(() => {
@@ -272,9 +319,21 @@ export default function SolicitudesPage() {
     <div className="p-8 max-w-7xl mx-auto">
     {/* Encabezado */}
     <div className="mb-8 flex items-center justify-between">
+    <div className="flex items-center gap-4">
     <Link href="/compras" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
     ← Volver a Compras
     </Link>
+
+    {/* === NUEVO: Botón para volver a la Obra === */}
+    {obraActual && (
+      <Link
+      href="/obras"
+      className="inline-flex items-center text-green-600 hover:text-green-800 font-medium"
+      >
+      ← Volver a {obraActual.nombre}
+      </Link>
+    )}
+    </div>
 
     <h1 className="text-3xl font-bold text-gray-900">Solicitud de Materiales e Insumos</h1>
 
@@ -398,6 +457,8 @@ export default function SolicitudesPage() {
       <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Obra</th>
       <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Insumo</th>
       <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Cantidad</th>
+      <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Cantidad Cotizada</th>
+      <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Pendiente por Cotizar</th>
       <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Solicitado por</th>
       <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Estado</th>
       <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Acciones</th>
@@ -416,6 +477,27 @@ export default function SolicitudesPage() {
         <td className="px-6 py-4 text-sm text-gray-800">{sol.insumo}</td>
         <td className="px-6 py-4 text-sm text-center text-gray-700">
         {sol.cantidad} {sol.unidad}
+        </td>
+        {/* Cantidad Cotizada */}
+        <td className="px-6 py-4 text-center text-sm">
+        {['pendiente', 'cotizada', 'aprobada'].includes(sol.estado) && cotizacionesResumen[sol.id] !== undefined ? (
+          <span className="font-medium text-blue-600">
+          {cotizacionesResumen[sol.id]}
+          </span>
+        ) : (
+          <span className="text-gray-400">—</span>
+        )}
+        </td>
+
+        {/* Pendiente por Cotizar */}
+        <td className="px-6 py-4 text-center text-sm">
+        {['pendiente', 'cotizada', 'aprobada'].includes(sol.estado) ? (
+          <span className={`font-medium ${Number(sol.cantidad) - (cotizacionesResumen[sol.id] || 0) > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+          {Math.max(0, Number(sol.cantidad) - (cotizacionesResumen[sol.id] || 0))}
+          </span>
+        ) : (
+          <span className="text-gray-400">—</span>
+        )}
         </td>
         <td className="px-6 py-4 text-sm text-gray-600">{sol.solicitado_por || '—'}</td>
         <td className="px-6 py-4 text-center">
@@ -441,18 +523,19 @@ export default function SolicitudesPage() {
             </button>
           )}
 
-          {/* Rechazar - Solo visible en pendiente y cotizada */}
-          {(sol.estado === 'pendiente' || sol.estado === 'cotizada') && (
-            <button
-            onClick={(e) => {
-              e.stopPropagation();
-              rechazarSolicitud(sol.id, sol.estado);
-            }}
-            className="px-3 py-1 text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 hover:border-red-300 rounded-lg transition-all"
-            >
-            ✕ Rechazar
-            </button>
-          )}
+          {/* Rechazar - Solo visible si está pendiente o cotizada Y no tiene cantidad ya cotizada */}
+          {(sol.estado === 'pendiente' || sol.estado === 'cotizada') &&
+            (!cotizacionesResumen[sol.id] || cotizacionesResumen[sol.id] === 0) && (
+              <button
+              onClick={(e) => {
+                e.stopPropagation();
+                rechazarSolicitud(sol.id, sol.estado);
+              }}
+              className="px-3 py-1 text-xs font-medium text-red-600 border border-red-200 hover:bg-red-50 hover:border-red-300 rounded-lg transition-all"
+              >
+              ✕ Rechazar
+              </button>
+            )}
 
           </div>
           </td>
@@ -675,6 +758,18 @@ export default function SolicitudesPage() {
       <button
       onClick={async () => {
         if (!editingSolicitud) return;
+
+        // === VALIDACIÓN: No permitir reducir cantidad por debajo de lo ya cotizado ===
+        const cantidadYaCotizada = cotizacionesResumen[editingSolicitud.id] || 0;
+
+        if (editingSolicitud.cantidad < cantidadYaCotizada) {
+          alert(
+            `No se puede reducir la cantidad.\n\n` +
+            `Ya se han cotizado ${cantidadYaCotizada} unidades de esta solicitud.\n` +
+            `La cantidad mínima permitida es: ${cantidadYaCotizada}`
+          );
+          return;
+        }
 
         try {
           const { error } = await supabase

@@ -14,6 +14,7 @@ export type EstadoOC =
 export default function OrdenesCompraPage() {
     const [ordenes, setOrdenes] = useState<any[]>([]);
     const [solicitudesAprobadas, setSolicitudesAprobadas] = useState<any[]>([]);
+    const [todasLasObras, setTodasLasObras] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
 
     const [estadoFiltro, setEstadoFiltro] = useState('todas');
@@ -39,7 +40,7 @@ export default function OrdenesCompraPage() {
     const [ordenSeleccionada, setOrdenSeleccionada] = useState<any>(null);
     const [historialOrden, setHistorialOrden] = useState<any[]>([]);
 
-    // Obras únicas para el filtro
+    {/*}// Obras únicas para el filtro
     const obrasUnicas = useMemo(() => {
         const obrasSet = new Set<string>();
         ordenes.forEach((orden: any) => {
@@ -47,7 +48,10 @@ export default function OrdenesCompraPage() {
             if (nombreObra) obrasSet.add(nombreObra);
         });
             return Array.from(obrasSet).sort();
-    }, [ordenes]);
+    }, [ordenes]); */}
+
+    // Obras para el filtro (cargadas independientemente)
+    const obrasParaFiltro = todasLasObras;
 
     // Filtro de órdenes (limpio)
     const ordenesFiltradas = useMemo(() => {
@@ -149,6 +153,17 @@ export default function OrdenesCompraPage() {
         }
     };
 
+    const cargarTodasLasObras = async () => {
+        const { data, error } = await supabase
+        .from('obras')
+        .select('id, nombre')
+        .order('nombre');
+
+        if (!error && data) {
+            setTodasLasObras(data);
+        }
+    };
+
     const cargarSolicitudesAprobadas = async () => {
         try {
             const { data, error } = await supabase
@@ -211,10 +226,17 @@ export default function OrdenesCompraPage() {
             return;
         }
 
-        // Si no tiene entradas, procedemos con la confirmación normal
+        // Bloquear si el estado ya es "recibida"
+        if (orden.estado === 'recibida') {
+            alert('No se puede cancelar una orden que ya está marcada como RECIBIDA.');
+            return;
+        }
+
+        // Confirmación
         if (!confirm(`¿Cancelar la orden de "${orden.proveedor}"?`)) return;
 
         try {
+            // 1. Actualizar la Orden de Compra a anulada
             const { error } = await supabase
             .from('ordenes_compra')
             .update({ estado: 'anulada' })
@@ -222,8 +244,17 @@ export default function OrdenesCompraPage() {
 
             if (error) throw error;
 
-            alert('Orden cancelada correctamente');
+            // 2. Liberar la Cotización asociada (si existe)
+            if (orden.cotizacion_id) {
+                await supabase
+                .from('cotizaciones')
+                .update({ estado: 'pendiente' })
+                .eq('id', orden.cotizacion_id);
+            }
+
+            alert('Orden cancelada correctamente. La cotización ha sido liberada.');
             cargarOrdenes();
+
         } catch (error: any) {
             console.error("Error al cancelar:", error);
             alert(`Error al cancelar la orden: ${error.message || error}`);
@@ -245,6 +276,7 @@ export default function OrdenesCompraPage() {
     // Carga inicial
     useEffect(() => {
         cargarOrdenes();
+        cargarTodasLasObras(); // ← Nuevo
     }, []);
 
     // Refresca cuando cambian filtros
@@ -376,8 +408,8 @@ export default function OrdenesCompraPage() {
         className="w-full border rounded-xl p-3"
         >
         <option value="">Todas las obras</option>
-        {obrasUnicas.map((obra, index) => (
-            <option key={index} value={obra}>{obra}</option>
+        {obrasParaFiltro.map((obra, index) => (
+            <option key={index} value={obra.nombre}>{obra.nombre}</option>
         ))}
         </select>
         </div>
@@ -554,6 +586,7 @@ export default function OrdenesCompraPage() {
                     Historial
                     </button>
 
+                    {/* Botón Enviar - Solo visible si está pendiente de aprobación */}
                     {orden.estado === 'pendiente_aprobacion' && (
                         <button
                         onClick={() => marcarComoEnviada(orden)}
@@ -563,7 +596,8 @@ export default function OrdenesCompraPage() {
                         </button>
                     )}
 
-                    {orden.estado !== 'anulada' && (
+                    {/* Botón Cancelar - Solo visible si NO está anulada ni recibida */}
+                    {orden.estado !== 'anulada' && orden.estado !== 'recibida' && (
                         <button
                         onClick={() => cancelarOrden(orden)}
                         className="px-2.5 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors"

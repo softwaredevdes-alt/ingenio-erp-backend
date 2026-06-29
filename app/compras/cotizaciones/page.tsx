@@ -170,11 +170,20 @@ export default function CotizacionesPage() {
   }, [selectedObraId, estadoFiltro, searchTerm, solicitanteTerm, fechaInicio, fechaFin]);
 
   const cargarCotizaciones = async (solicitudId: number) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
     .from('cotizaciones')
-    .select('*')
+    .select(`
+    *,
+    ordenes_compra (id, estado)
+    `)
     .eq('solicitud_id', solicitudId)
-    .order('precio_unitario', { ascending: true });
+    .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error cargando cotizaciones:', error);
+      return [];
+    }
+
     return data || [];
   };
 
@@ -264,9 +273,9 @@ export default function CotizacionesPage() {
       return;
     }
 
-    // === NUEVA LÓGICA DE VALIDACIÓN ===
+    // === Validación de cantidad máxima permitida ===
     const cantidadYaSeleccionada = cotizaciones
-    .filter(c => c.estado === 'seleccionada' && c.id !== editingCotizacion.id) // excluimos la que estamos editando
+    .filter(c => c.estado === 'seleccionada' && c.id !== editingCotizacion.id)
     .reduce((sum, c) => sum + Number(c.cantidad || 0), 0);
 
     const cantidadMaxima = selectedSolicitud.cantidad - cantidadYaSeleccionada;
@@ -275,75 +284,93 @@ export default function CotizacionesPage() {
       alert(`La cantidad máxima permitida es ${cantidadMaxima} ${selectedSolicitud.unidad} (restante por cotizar).`);
       return;
     }
-    // ===================================
 
     try {
-      const { error } = await supabase.from('cotizaciones').update({
+      // 1. Actualizar la Cotización
+      const { error } = await supabase
+      .from('cotizaciones')
+      .update({
         proveedor: nuevaCotizacion.proveedor,
         precio_unitario: Number(nuevaCotizacion.precio_unitario),
-                                                                   cantidad: cantidadNueva,
-                                                                   tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
-                                                                   observaciones: nuevaCotizacion.observaciones || null,
-                                                                   creado_por: nuevaCotizacion.creado_por || null,
-      }).eq('id', editingCotizacion.id);
+              cantidad: cantidadNueva,
+              tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias
+              ? Number(nuevaCotizacion.tiempo_entrega_dias)
+              : null,
+              observaciones: nuevaCotizacion.observaciones || null,
+              creado_por: nuevaCotizacion.creado_por || null,
+      })
+      .eq('id', editingCotizacion.id);
 
       if (error) throw error;
 
-      // Actualizar la OC si la cotización estaba seleccionada
+      // 2. Sincronizar con Orden de Compra (solo si está pendiente de aprobación)
       if (editingCotizacion.estado === 'seleccionada') {
         const { data: oc } = await supabase
         .from('ordenes_compra')
-        .select('id')
+        .select('id, estado')
         .eq('cotizacion_id', editingCotizacion.id)
-        .single();
+        .maybeSingle();
 
-        if (oc) {
-          await supabase.from('ordenes_compra').update({
+        if (oc && oc.estado === 'pendiente_aprobacion') {
+          const nuevoTotal = Number(nuevaCotizacion.precio_unitario) * cantidadNueva;
+
+          await supabase
+          .from('ordenes_compra')
+          .update({
             proveedor: nuevaCotizacion.proveedor,
-            total: Number(nuevaCotizacion.precio_unitario) * cantidadNueva,
-                                                       cantidad: cantidadNueva,
-          }).eq('id', oc.id);
+            cantidad: cantidadNueva,
+            total: nuevoTotal,
+          })
+          .eq('id', oc.id);
         }
       }
 
-      alert('Cotización y Orden de Compra actualizadas correctamente');
+      alert('Cotización actualizada correctamente');
+
+      // Cerrar modal y recargar datos
       setShowEditModal(false);
       setEditingCotizacion(null);
-      setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
+      setNuevaCotizacion({
+        proveedor: '',
+        precio_unitario: '',
+        cantidad: '',
+        tiempo_entrega_dias: '',
+        observaciones: '',
+        creado_por: '',
+      });
 
       if (selectedSolicitud) {
         const cotis = await cargarCotizaciones(selectedSolicitud.id);
         setCotizaciones(cotis);
       }
+
       cargarSolicitudes();
 
-      alert('Cambios guardados. Por favor recarga la página de Órdenes de Compra para ver las actualizaciones.');
     } catch (error) {
       console.error(error);
-      alert('Error al actualizar');
+      alert('Error al actualizar la cotización');
     }
   };
 
-  const eliminarCotizacion = async (cot: Cotizacion) => {
+  const eliminarCotizacion = async (cot: any) => {
     // No permitir eliminar cotizaciones que ya fueron seleccionadas
     if (cot.estado === 'seleccionada') {
-      alert('No se puede eliminar una cotización que ya ha sido seleccionada y tiene una Orden de Compra asociada.');
-      return;
-    }
-
-    if (!confirm(`¿Eliminar la cotización de "${cot.proveedor}"?`)) return;
-
-    try {
-      // Verificar si tiene una OC asociada y si esa OC ya tiene entradas
+      // Verificar si tiene OC asociada
       const { data: ordenes } = await supabase
       .from('ordenes_compra')
-      .select('id')
+      .select('id, estado')
       .eq('cotizacion_id', cot.id);
 
       if (ordenes && ordenes.length > 0) {
         for (const orden of ordenes) {
-          const cantidadRecibida = await calcularCantidadRecibida(orden.id);
-          if (cantidadRecibida > 0) {
+          // Verificar si la OC tiene entradas
+          const { data: entradas } = await supabase
+          .from('entradas_almacen')
+          .select('id')
+          .eq('orden_compra_id', orden.id)
+          .limit(1);
+
+          if (entradas && entradas.length > 0) {
             alert(
               'No se puede eliminar esta cotización.\n\n' +
               'La Orden de Compra asociada ya tiene material recibido en almacén.\n' +
@@ -354,7 +381,13 @@ export default function CotizacionesPage() {
         }
       }
 
-      // Si llegó hasta aquí, es seguro eliminar
+      alert('No se puede eliminar una cotización que ya ha sido seleccionada y tiene una Orden de Compra asociada.');
+      return;
+    }
+
+    if (!confirm(`¿Eliminar la cotización de "${cot.proveedor}"?`)) return;
+
+    try {
       await supabase.from('cotizaciones').delete().eq('id', cot.id);
 
       alert('Cotización eliminada correctamente');
@@ -746,20 +779,27 @@ export default function CotizacionesPage() {
                 Seleccionar
                 </button>
               )}
-              <button
-              onClick={() => abrirEditar(cot)}
-              className="px-3 py-1.5 text-sm border border-gray-300 hover:bg-gray-100 rounded-xl transition-colors"
-              >
-              Editar
-              </button>
-              {cot.estado !== 'seleccionada' && (
-                <button
-                onClick={() => eliminarCotizacion(cot)}
-                className="px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-colors"
-                >
-                Eliminar
-                </button>
-              )}
+
+
+
+              {/* Botón Editar - Versión más segura */}
+              {(() => {
+                const ocEstado = Array.isArray(cot.ordenes_compra)
+                ? cot.ordenes_compra[0]?.estado
+                : cot.ordenes_compra?.estado;
+
+                const tieneOCAvanzada = cot.estado === 'seleccionada' &&
+                ocEstado && (ocEstado === 'enviada' || ocEstado === 'recibida');
+
+                return !tieneOCAvanzada && (
+                  <button
+                  onClick={() => abrirEditar(cot)}
+                  className="px-3 py-1.5 text-sm border border-gray-300 hover:bg-gray-100 rounded-xl"
+                  >
+                  Editar
+                  </button>
+                );
+              })()}
               </div>
 
               {cot.observaciones && (

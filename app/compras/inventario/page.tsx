@@ -97,24 +97,54 @@ export default function InventarioPage() {
         };
     };
 
-    // Ver Kardex de un material
+    // Ver Kardex mejorado (incluye Entradas + Ajustes)
     const verKardex = async (item: any) => {
         setMaterialSeleccionado(item);
 
-        const { data, error } = await supabase
-        .from('entradas_almacen')
-        .select('*')
-        .eq('insumo', item.insumo)
-        .order('fecha_entrada', { ascending: false });
+        try {
+            // 1. Traer Entradas de almacén
+            const { data: entradas, error: errorEntradas } = await supabase
+            .from('entradas_almacen')
+            .select('*')
+            .eq('insumo', item.insumo)
+            .order('fecha_entrada', { ascending: false });
 
-        if (error) {
+            if (errorEntradas) throw errorEntradas;
+
+            // 2. Traer Ajustes de inventario
+            const { data: ajustes, error: errorAjustes } = await supabase
+            .from('ajustes_inventario')
+            .select('*')
+            .eq('insumo', item.insumo)
+            .eq('obra_id', item.obra_id)
+            .order('fecha_ajuste', { ascending: false });
+
+            if (errorAjustes) throw errorAjustes;
+
+            // 3. Unificar y ordenar por fecha
+            const movimientosEntradas = (entradas || []).map((mov: any) => ({
+                ...mov,
+                tipo_movimiento: 'entrada',
+                fecha: mov.fecha_entrada,
+            }));
+
+            const movimientosAjustes = (ajustes || []).map((ajuste: any) => ({
+                ...ajuste,
+                tipo_movimiento: 'ajuste',
+                fecha: ajuste.fecha_ajuste,
+            }));
+
+            const todosLosMovimientos = [...movimientosEntradas, ...movimientosAjustes].sort(
+                (a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime()
+            );
+
+            setKardexData(todosLosMovimientos);
+            setShowKardexModal(true);
+
+        } catch (error) {
             console.error(error);
             alert('Error al cargar el Kardex');
-            return;
         }
-
-        setKardexData(data || []);
-        setShowKardexModal(true);
     };
 
     // Abrir Modal de Ajustes
@@ -126,15 +156,16 @@ export default function InventarioPage() {
         setShowAjusteModal(true);
     };
 
-    // Guardar ajustes al inventario
+    // Guardar ajuste de stock (versión mejorada)
     const guardarAjusteStock = async () => {
-        if (!itemParaAjuste || !nuevoStock) {
-            alert('Datos incompletos');
+        if (!itemParaAjuste || !nuevoStock || !ajustadoPor) {
+            alert('Por favor completa los campos obligatorios (Nueva Cantidad y Realizado por)');
             return;
         }
 
         const nuevaCantidad = Number(nuevoStock);
-        const diferencia = nuevaCantidad - itemParaAjuste.cantidad;
+        const cantidadAnterior = Number(itemParaAjuste.cantidad);
+        const diferencia = nuevaCantidad - cantidadAnterior;
 
         if (diferencia === 0) {
             alert('No hay cambios en la cantidad');
@@ -142,23 +173,43 @@ export default function InventarioPage() {
         }
 
         try {
-            // Actualizar cantidad en inventario
-            const { error } = await supabase
+            // 1. Insertar registro en ajustes_inventario
+            const { error: ajusteError } = await supabase
+            .from('ajustes_inventario')
+            .insert({
+                insumo: itemParaAjuste.insumo,
+                obra_id: itemParaAjuste.obra_id,
+                tipo: diferencia > 0 ? 'entrada' : 'salida',
+                cantidad: diferencia,
+                motivo: motivoAjuste || 'Ajuste manual de stock',
+                realizado_por: ajustadoPor,
+                observaciones: motivoAjuste || null,
+                stock_anterior: cantidadAnterior,
+                stock_nuevo: nuevaCantidad,
+            });
+
+            if (ajusteError) throw ajusteError;
+
+            // 2. Actualizar cantidad en inventario
+            const { error: updateError } = await supabase
             .from('inventario')
             .update({
                 cantidad: nuevaCantidad,
-                updated_at: new Date().toISOString()
+                updated_at: new Date().toISOString(),
             })
             .eq('id', itemParaAjuste.id);
 
-            if (error) throw error;
+            if (updateError) throw updateError;
 
-            alert('Stock ajustado correctamente');
+            alert('Ajuste registrado correctamente');
             setShowAjusteModal(false);
+            setMotivoAjuste('');
+            setAjustadoPor('');
             cargarInventario();
+
         } catch (error) {
             console.error(error);
-            alert('Error al ajustar el stock');
+            alert('Error al registrar el ajuste');
         }
     };
 
@@ -419,32 +470,55 @@ export default function InventarioPage() {
                 <p className="text-lg">No hay movimientos registrados para este material.</p>
                 </div>
             ) : (
-                <div className="space-y-4">
-                {kardexData.map((mov, index) => (
-                    <div key={index} className="border border-gray-200 rounded-2xl p-5 hover:shadow-sm transition-shadow">
+                <div className="space-y-3">
+                {kardexData.map((mov, index) => {
+                    const esEntrada = mov.tipo_movimiento === 'entrada';
+                    const esAjuste = mov.tipo_movimiento === 'ajuste';
+
+                return (
+                    <div
+                    key={index}
+                    className={`border rounded-2xl p-4 ${
+                        esEntrada
+                        ? 'border-green-200 bg-green-50'
+                        : 'border-orange-200 bg-orange-50'
+                    }`}
+                    >
                     <div className="flex justify-between items-start">
                     <div>
-                    <div className="flex items-center gap-3">
-                    <span className="text-2xl font-bold text-green-600">
-                    +{mov.cantidad_recibida}
+                    <div className="flex items-center gap-2">
+                    <span className={`text-xl font-bold ${esEntrada ? 'text-green-600' : 'text-orange-600'}`}>
+                    {esEntrada ? '+' : ''}{esEntrada ? mov.cantidad_recibida : mov.cantidad}
                     </span>
-                    <span className="text-gray-600">{mov.unidad}</span>
+                    <span className="text-gray-600">
+                    {mov.unidad || materialSeleccionado?.unidad}
+                    </span>
+
+                    {esAjuste && (
+                        <span className="ml-2 px-2 py-0.5 text-xs rounded-full bg-orange-200 text-orange-700 font-medium">
+                        Ajuste
+                        </span>
+                    )}
                     </div>
+
                     <p className="text-sm text-gray-600 mt-1">
-                    Recibido por: <span className="font-medium">{mov.recibido_por || '—'}</span>
+                    {esEntrada ? 'Recibido por:' : 'Realizado por:'}{' '}
+                    <span className="font-medium">
+                    {esEntrada ? mov.recibido_por : mov.realizado_por || '—'}
+                    </span>
                     </p>
                     </div>
-                    <div className="text-right">
-                    <p className="text-sm text-gray-500">
-                    {new Date(mov.fecha_entrada).toLocaleDateString('es-CO', {
-                        weekday: 'short',
-                        day: 'numeric',
+
+                    <div className="text-right text-sm text-gray-500">
+                    <p>
+                    {new Date(mov.fecha).toLocaleDateString('es-CO', {
+                        day: '2-digit',
                         month: 'short',
                         year: 'numeric'
                     })}
                     </p>
                     <p className="text-xs text-gray-400">
-                    {new Date(mov.fecha_entrada).toLocaleTimeString('es-CO', {
+                    {new Date(mov.fecha).toLocaleTimeString('es-CO', {
                         hour: '2-digit',
                         minute: '2-digit'
                     })}
@@ -452,14 +526,18 @@ export default function InventarioPage() {
                     </div>
                     </div>
 
-                    {mov.observaciones && (
-                        <div className="mt-4 pt-4 border-t text-sm text-gray-600">
-                        <span className="font-medium text-gray-700">Observaciones:</span><br />
-                        {mov.observaciones}
+                    {(mov.observaciones || mov.motivo) && (
+                        <div className="mt-3 pt-3 border-t text-sm text-gray-600">
+                        <span className="font-medium text-gray-700">
+                        {esEntrada ? 'Observaciones:' : 'Motivo:'}
+                        </span>
+                        <br />
+                        {esEntrada ? mov.observaciones : mov.motivo}
                         </div>
                     )}
                     </div>
-                ))}
+                );
+                })}
                 </div>
             )}
             </div>
@@ -477,7 +555,6 @@ export default function InventarioPage() {
             </div>
         )}
 
-        {/* Modal Ajustar Stock */}
         {/* Modal Ajustar Stock */}
         {showAjusteModal && itemParaAjuste && (
             <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">

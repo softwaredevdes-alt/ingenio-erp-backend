@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
+import Link from 'next/link';
 
 interface Obra {
   id: string
@@ -20,6 +21,9 @@ export default function ObrasPage() {
   const [showModal, setShowModal] = useState(false)
   const [editingObra, setEditingObra] = useState<Obra | null>(null)
 
+  const [solicitudesPorObra, setSolicitudesPorObra] = useState<Record<string, number>>({});
+  const [ordenesPorObra, setOrdenesPorObra] = useState<Record<string, number>>({});
+
   const [formData, setFormData] = useState({
     nombre: '',
     descripcion: '',
@@ -33,6 +37,34 @@ export default function ObrasPage() {
     fetchObras()
   }, [])
 
+  const cargarActividadCompras = async () => {
+    // Contar solicitudes por obra
+    const { data: solicitudesData } = await supabase
+    .from('solicitudes')
+    .select('obra_id');
+
+    const solicitudesCount: Record<string, number> = {};
+    solicitudesData?.forEach((s: any) => {
+      solicitudesCount[s.obra_id] = (solicitudesCount[s.obra_id] || 0) + 1;
+    });
+    setSolicitudesPorObra(solicitudesCount);
+
+    // Contar órdenes de compra por obra (a través de solicitud)
+    const { data: ordenesData } = await supabase
+    .from('ordenes_compra')
+    .select('solicitud_id, solicitudes(obra_id)');
+
+    const ordenesCount: Record<string, number> = {};
+    ordenesData?.forEach((o: any) => {
+      const obraId = o.solicitudes?.obra_id;
+      if (obraId) {
+        ordenesCount[obraId] = (ordenesCount[obraId] || 0) + 1;
+      }
+    });
+    setOrdenesPorObra(ordenesCount);
+  };
+
+
   const fetchObras = async () => {
     setLoading(true)
     const { data, error } = await supabase
@@ -42,6 +74,8 @@ export default function ObrasPage() {
 
     if (!error) setObras(data || [])
       setLoading(false)
+
+    cargarActividadCompras();
   }
 
   const openModal = (obra?: Obra) => {
@@ -171,7 +205,7 @@ export default function ObrasPage() {
   };
 
   return (
-    <div className="p-8 max-w-6xl mx-auto">
+    <div className="p-8 max-w-7xl mx-auto">
     <div className="flex justify-between items-center mb-6">
     <h1 className="text-3xl font-bold">Gestión de Obras</h1>
     <button
@@ -182,24 +216,26 @@ export default function ObrasPage() {
     </button>
     </div>
 
-    {/* Listado de Obras Mejorado */}
+    {/* Tabla de Obras con scroll horizontal cuando sea necesario */}
     <div className="bg-white rounded-2xl shadow overflow-hidden">
-    <table className="w-full">
+    <div className="overflow-x-auto">
+    <table className="w-full min-w-[1200px]">
     <thead className="bg-gray-50 border-b">
     <tr>
-    <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Nombre</th>
-    <th className="px-6 py-4 text-left text-sm font-semibold text-gray-700">Descripción</th>
-    <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Estado</th>
-    <th className="px-6 py-4 text-right text-sm font-semibold text-gray-700">Presupuesto</th>
-    <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Período</th>
-    <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Creada</th>
-    <th className="px-6 py-4 text-center text-sm font-semibold text-gray-700">Acciones</th>
+    <th className="px-4 py-4 text-left text-sm font-semibold text-gray-700">Nombre</th>
+    <th className="px-4 py-4 text-left text-sm font-semibold text-gray-700">Descripción</th>
+    <th className="px-4 py-4 text-center text-sm font-semibold text-gray-700">Estado</th>
+    <th className="px-4 py-4 text-right text-sm font-semibold text-gray-700">Presupuesto</th>
+    <th className="px-4 py-4 text-center text-sm font-semibold text-gray-700">Período</th>
+    <th className="px-4 py-4 text-center text-sm font-semibold text-gray-700">Creada</th>
+    <th className="px-4 py-4 text-center text-sm font-semibold text-gray-700">Actividad de Compras</th>
+    <th className="px-4 py-4 text-center text-sm font-semibold text-gray-700">Acciones</th>
     </tr>
     </thead>
     <tbody className="divide-y">
     {obras.length === 0 ? (
       <tr>
-      <td colSpan={7} className="px-6 py-10 text-center text-gray-500">
+      <td colSpan={7} className="px-4 py-10 text-center text-gray-500">
       No hay obras registradas todavía.
       </td>
       </tr>
@@ -209,18 +245,18 @@ export default function ObrasPage() {
       .map((obra) => (
         <tr key={obra.id} className="hover:bg-gray-50">
         {/* Nombre */}
-        <td className="px-6 py-4 font-semibold text-gray-900">{obra.nombre}</td>
+        <td className="px-4 py-4 font-semibold text-gray-900">{obra.nombre}</td>
 
-        {/* Descripción */}
+        {/* Descripción - Más controlada */}
         <td
-        className="px-6 py-4 text-sm text-gray-600 max-w-xs truncate cursor-help"
+        className="px-4 py-4 text-sm text-gray-600 max-w-[220px] truncate cursor-help"
         title={obra.descripcion || ''}
         >
         {obra.descripcion || <span className="text-gray-400 italic">Sin descripción</span>}
         </td>
 
-        {/* Estado con select */}
-        <td className="px-6 py-4 text-center">
+        {/* Estado */}
+        <td className="px-4 py-4 text-center">
         <select
         value={obra.estado}
         onChange={(e) => cambiarEstadoObra(obra.id, e.target.value)}
@@ -233,15 +269,15 @@ export default function ObrasPage() {
         </select>
         </td>
 
-        {/* Presupuesto Estimado */}
-        <td className="px-6 py-4 text-right font-medium text-gray-900">
+        {/* Presupuesto */}
+        <td className="px-4 py-4 text-right font-medium text-gray-900">
         {obra.presupuesto_estimado && obra.presupuesto_estimado > 0
           ? `$${Number(obra.presupuesto_estimado).toLocaleString('es-CO')}`
           : <span className="text-gray-400">—</span>}
           </td>
 
           {/* Período */}
-          <td className="px-6 py-4 text-center text-sm text-gray-600">
+          <td className="px-4 py-4 text-center text-sm text-gray-600">
           {obra.fecha_inicio && obra.fecha_fin ? (
             `${new Date(obra.fecha_inicio).toLocaleDateString('es-CO')} → ${new Date(obra.fecha_fin).toLocaleDateString('es-CO')}`
           ) : obra.fecha_inicio ? (
@@ -254,18 +290,46 @@ export default function ObrasPage() {
           </td>
 
           {/* Fecha de creación */}
-          <td className="px-6 py-4 text-center text-sm text-gray-500">
+          <td className="px-4 py-4 text-center text-sm text-gray-500">
           {new Date(obra.created_at).toLocaleDateString('es-CO')}
           </td>
 
-          {/* Acciones */}
-          <td className="px-6 py-4 text-center">
+          {/* Actividad de Compras */}
+          <td className="px-4 py-4 text-center">
+          <div className="flex flex-col items-center gap-1">
+          <div className="text-sm">
+          <span className="font-medium">Sol: </span>
+          <span className={solicitudesPorObra[obra.id] > 0 ? "text-blue-600 font-semibold" : "text-gray-400"}>
+          {solicitudesPorObra[obra.id] || 0}
+          </span>
+          </div>
+          <div className="text-sm">
+          <span className="font-medium">OC: </span>
+          <span className={ordenesPorObra[obra.id] > 0 ? "text-emerald-600 font-semibold" : "text-gray-400"}>
+          {ordenesPorObra[obra.id] || 0}
+          </span>
+          </div>
+          </div>
+          </td>
+
+          {/* Acciones - Botones un poco más grandes */}
+          <td className="px-4 py-4 text-center min-w-[160px]">
+          <div className="flex items-center justify-center gap-2 whitespace-nowrap">
+          {/* Editar - con fondo tenue amarillo */}
           <button
           onClick={() => openModal(obra)}
-          className="px-4 py-1.5 text-sm border border-gray-300 hover:bg-gray-100 rounded-lg transition-colors"
+          className="px-3 py-1.5 text-sm bg-amber-100 hover:bg-amber-200 text-amber-700 border border-amber-200 rounded-lg transition-colors"
           >
           Editar
           </button>
+
+          {/* + Solicitud - verde */}
+          <Link href={`/compras/solicitudes?obra_id=${obra.id}`}>
+          <button className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+          + Solicitud
+          </button>
+          </Link>
+          </div>
           </td>
           </tr>
       ))
@@ -273,8 +337,8 @@ export default function ObrasPage() {
     </tbody>
     </table>
     </div>
+    </div>
 
-    {/* Modal Crear / Editar Obra - Mejorado */}
     {/* Modal Crear / Editar Obra - Actualizado con Presupuesto */}
     {showModal && (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
