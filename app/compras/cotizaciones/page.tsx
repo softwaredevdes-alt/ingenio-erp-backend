@@ -498,7 +498,7 @@ export default function CotizacionesPage() {
   </div>
 
   {/* Fila 2: Búsquedas más amplias + Limpiar Filtros */}
-<div className="grid grid-cols-1 md:grid-cols-7 gap-4 mt-5">
+<div className="grid grid-cols-1 md:grid-cols-5 gap-4 mt-5">
   
   {/* Buscar por Insumo - más ancho */}
   <div className="md:col-span-2">
