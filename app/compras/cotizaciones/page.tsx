@@ -5,6 +5,16 @@ import { supabase } from '@/lib/supabase';
 import Link from 'next/link';
 import { generarNumeroOC } from '@/lib/utils';
 
+import PageHeader from '@/components/ui/PageHeader';
+import ActionButton from '@/components/ui/ActionButton';
+import Modal from '@/components/ui/Modal';
+import Card from '@/components/ui/Card';
+import EmptyState from '@/components/ui/EmptyState';
+import Loading from '@/components/ui/Loading';
+import SearchInput from '@/components/ui/SearchInput';
+import SelectFilter from '@/components/ui/SelectFilter';
+import DateRangeFilter from '@/components/ui/DateRangeFilter';
+
 interface Solicitud {
   id: number;
   obra_id: string;
@@ -27,6 +37,7 @@ interface Cotizacion {
   observaciones?: string;
   estado: string;
   creado_por?: string;
+  ordenes_compra?: any;
 }
 
 export default function CotizacionesPage() {
@@ -71,13 +82,12 @@ export default function CotizacionesPage() {
     setEstadoFiltro('todas');
   };
 
-  // Debounce búsqueda
+  // Debounce
   useEffect(() => {
     const timer = setTimeout(() => setSearchTerm(searchInput), 800);
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  // Debounce para Solicitante
   useEffect(() => {
     const timer = setTimeout(() => setSolicitanteTerm(solicitanteFiltro), 500);
     return () => clearTimeout(timer);
@@ -89,49 +99,36 @@ export default function CotizacionesPage() {
       const { data } = await supabase.from('obras').select('id, nombre').order('nombre');
       if (data) setObras(data);
     };
-      cargarObras();
+    cargarObras();
   }, []);
 
-  // Cargar solicitudes con filtros
   const cargarSolicitudes = async () => {
     setLoading(true);
     try {
       let query = supabase
-      .from('solicitudes')
-      .select('*, obras(nombre)')
-      .in('estado', ['pendiente', 'cotizada'])
-      .order('fecha_solicitud', { ascending: false });
+        .from('solicitudes')
+        .select('*, obras(nombre)')
+        .in('estado', ['pendiente', 'cotizada'])
+        .order('fecha_solicitud', { ascending: false });
 
-      if (selectedObraId) {
-        query = query.eq('obra_id', selectedObraId);
-      }
-
-      if (estadoFiltro !== 'todas') {
-        query = query.eq('estado', estadoFiltro);
-      }
+      if (selectedObraId) query = query.eq('obra_id', selectedObraId);
+      if (estadoFiltro !== 'todas') query = query.eq('estado', estadoFiltro);
 
       const { data, error } = await query;
       if (error) throw error;
 
       let filtered = data || [];
 
-      // Filtro por Insumo
-      if (searchTerm.trim() !== '') {
+      if (searchTerm.trim()) {
         const texto = searchTerm.toLowerCase().trim();
-        filtered = filtered.filter((s: any) =>
-        s.insumo?.toLowerCase().includes(texto)
-        );
+        filtered = filtered.filter((s: any) => s.insumo?.toLowerCase().includes(texto));
       }
 
-      // Filtro por Solicitante
-      if (solicitanteTerm.trim() !== '') {
+      if (solicitanteTerm.trim()) {
         const texto = solicitanteTerm.toLowerCase().trim();
-        filtered = filtered.filter((s: any) =>
-        s.solicitado_por?.toLowerCase().includes(texto)
-        );
+        filtered = filtered.filter((s: any) => s.solicitado_por?.toLowerCase().includes(texto));
       }
 
-      // Filtro por Fecha
       if (fechaInicio || fechaFin) {
         filtered = filtered.filter((s: any) => {
           const fecha = new Date(s.fecha_solicitud);
@@ -143,18 +140,18 @@ export default function CotizacionesPage() {
 
       setSolicitudes(filtered);
 
-      // Recalcular conteo de cotizaciones
+      // Conteo de cotizaciones
       const counts: Record<number, number> = {};
       for (const sol of filtered) {
         const { count } = await supabase
-        .from('cotizaciones')
-        .select('*', { count: 'exact', head: true })
-        .eq('solicitud_id', sol.id);
+          .from('cotizaciones')
+          .select('*', { count: 'exact', head: true })
+          .eq('solicitud_id', sol.id);
         counts[sol.id] = count || 0;
       }
       setCotizacionesCount(counts);
 
-      if (selectedSolicitud && !filtered.find((s) => s.id === selectedSolicitud.id)) {
+      if (selectedSolicitud && !filtered.find(s => s.id === selectedSolicitud.id)) {
         setSelectedSolicitud(null);
         setCotizaciones([]);
       }
@@ -171,19 +168,15 @@ export default function CotizacionesPage() {
 
   const cargarCotizaciones = async (solicitudId: number) => {
     const { data, error } = await supabase
-    .from('cotizaciones')
-    .select(`
-    *,
-    ordenes_compra (id, estado)
-    `)
-    .eq('solicitud_id', solicitudId)
-    .order('created_at', { ascending: false });
+      .from('cotizaciones')
+      .select(`*, ordenes_compra (id, estado)`)
+      .eq('solicitud_id', solicitudId)
+      .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Error cargando cotizaciones:', error);
+      console.error(error);
       return [];
     }
-
     return data || [];
   };
 
@@ -193,6 +186,7 @@ export default function CotizacionesPage() {
     setCotizaciones(cotis);
   };
 
+  // === AGREGAR COTIZACIÓN ===
   const agregarCotizacion = async () => {
     if (!selectedSolicitud || !nuevaCotizacion.proveedor || !nuevaCotizacion.precio_unitario || !nuevaCotizacion.cantidad) {
       alert('Por favor completa proveedor, precio unitario y cantidad');
@@ -200,38 +194,34 @@ export default function CotizacionesPage() {
     }
 
     const cantidadNueva = Number(nuevaCotizacion.cantidad);
-
     if (cantidadNueva <= 0) {
       alert("La cantidad debe ser mayor a 0");
       return;
     }
 
-    // Calcular cantidad máxima permitida
     const cantidadYaSeleccionada = cotizaciones
-    .filter(c => c.estado === 'seleccionada')
-    .reduce((sum, c) => sum + Number(c.cantidad || 0), 0);
+      .filter(c => c.estado === 'seleccionada')
+      .reduce((sum, c) => sum + Number(c.cantidad || 0), 0);
 
     const cantidadMaxima = selectedSolicitud.cantidad - cantidadYaSeleccionada;
 
     if (cantidadNueva > cantidadMaxima) {
-      alert(`La cantidad máxima permitida es ${cantidadMaxima} ${selectedSolicitud.unidad} (restante por cotizar).`);
+      alert(`La cantidad máxima permitida es ${cantidadMaxima} ${selectedSolicitud.unidad}`);
       return;
     }
 
     try {
-      const { error } = await supabase.from('cotizaciones').insert({
+      await supabase.from('cotizaciones').insert({
         solicitud_id: selectedSolicitud.id,
         proveedor: nuevaCotizacion.proveedor,
         precio_unitario: Number(nuevaCotizacion.precio_unitario),
-                                                                   cantidad: cantidadNueva,
-                                                                   unidad: selectedSolicitud.unidad,
-                                                                   tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
-                                                                   observaciones: nuevaCotizacion.observaciones || null,
-                                                                   creado_por: nuevaCotizacion.creado_por || null,
-                                                                   estado: 'pendiente',
+        cantidad: cantidadNueva,
+        unidad: selectedSolicitud.unidad,
+        tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
+        observaciones: nuevaCotizacion.observaciones || null,
+        creado_por: nuevaCotizacion.creado_por || null,
+        estado: 'pendiente',
       });
-
-      if (error) throw error;
 
       await supabase.from('solicitudes').update({ estado: 'cotizada' }).eq('id', selectedSolicitud.id);
 
@@ -245,7 +235,6 @@ export default function CotizacionesPage() {
       }
       cargarSolicitudes();
     } catch (error) {
-      console.error(error);
       alert('Error al agregar la cotización');
     }
   };
@@ -255,7 +244,7 @@ export default function CotizacionesPage() {
     setNuevaCotizacion({
       proveedor: cot.proveedor,
       precio_unitario: cot.precio_unitario.toString(),
-      cantidad: cot.cantidad.toString(),           // ← Asegúrate de esto
+      cantidad: cot.cantidad.toString(),
       tiempo_entrega_dias: cot.tiempo_entrega_dias?.toString() || '',
       observaciones: cot.observaciones || '',
       creado_por: cot.creado_por || '',
@@ -267,121 +256,68 @@ export default function CotizacionesPage() {
     if (!editingCotizacion || !selectedSolicitud) return;
 
     const cantidadNueva = Number(nuevaCotizacion.cantidad) || 0;
-
     if (cantidadNueva <= 0) {
       alert("La cantidad debe ser mayor a 0");
       return;
     }
 
-    // === Validación de cantidad máxima permitida ===
     const cantidadYaSeleccionada = cotizaciones
-    .filter(c => c.estado === 'seleccionada' && c.id !== editingCotizacion.id)
-    .reduce((sum, c) => sum + Number(c.cantidad || 0), 0);
+      .filter(c => c.estado === 'seleccionada' && c.id !== editingCotizacion.id)
+      .reduce((sum, c) => sum + Number(c.cantidad || 0), 0);
 
     const cantidadMaxima = selectedSolicitud.cantidad - cantidadYaSeleccionada;
 
     if (cantidadNueva > cantidadMaxima) {
-      alert(`La cantidad máxima permitida es ${cantidadMaxima} ${selectedSolicitud.unidad} (restante por cotizar).`);
+      alert(`La cantidad máxima permitida es ${cantidadMaxima}`);
       return;
     }
 
     try {
-      // 1. Actualizar la Cotización
-      const { error } = await supabase
-      .from('cotizaciones')
-      .update({
+      await supabase.from('cotizaciones').update({
         proveedor: nuevaCotizacion.proveedor,
         precio_unitario: Number(nuevaCotizacion.precio_unitario),
-              cantidad: cantidadNueva,
-              tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias
-              ? Number(nuevaCotizacion.tiempo_entrega_dias)
-              : null,
-              observaciones: nuevaCotizacion.observaciones || null,
-              creado_por: nuevaCotizacion.creado_por || null,
-      })
-      .eq('id', editingCotizacion.id);
+        cantidad: cantidadNueva,
+        tiempo_entrega_dias: nuevaCotizacion.tiempo_entrega_dias ? Number(nuevaCotizacion.tiempo_entrega_dias) : null,
+        observaciones: nuevaCotizacion.observaciones || null,
+        creado_por: nuevaCotizacion.creado_por || null,
+      }).eq('id', editingCotizacion.id);
 
-      if (error) throw error;
-
-      // 2. Sincronizar con Orden de Compra (solo si está pendiente de aprobación)
+      // Sincronizar OC si está seleccionada
       if (editingCotizacion.estado === 'seleccionada') {
         const { data: oc } = await supabase
-        .from('ordenes_compra')
-        .select('id, estado')
-        .eq('cotizacion_id', editingCotizacion.id)
-        .maybeSingle();
+          .from('ordenes_compra')
+          .select('id, estado')
+          .eq('cotizacion_id', editingCotizacion.id)
+          .maybeSingle();
 
         if (oc && oc.estado === 'pendiente_aprobacion') {
           const nuevoTotal = Number(nuevaCotizacion.precio_unitario) * cantidadNueva;
-
-          await supabase
-          .from('ordenes_compra')
-          .update({
+          await supabase.from('ordenes_compra').update({
             proveedor: nuevaCotizacion.proveedor,
             cantidad: cantidadNueva,
             total: nuevoTotal,
-          })
-          .eq('id', oc.id);
+          }).eq('id', oc.id);
         }
       }
 
       alert('Cotización actualizada correctamente');
-
-      // Cerrar modal y recargar datos
       setShowEditModal(false);
       setEditingCotizacion(null);
-      setNuevaCotizacion({
-        proveedor: '',
-        precio_unitario: '',
-        cantidad: '',
-        tiempo_entrega_dias: '',
-        observaciones: '',
-        creado_por: '',
-      });
+      setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
 
       if (selectedSolicitud) {
         const cotis = await cargarCotizaciones(selectedSolicitud.id);
         setCotizaciones(cotis);
       }
-
       cargarSolicitudes();
-
     } catch (error) {
-      console.error(error);
       alert('Error al actualizar la cotización');
     }
   };
 
   const eliminarCotizacion = async (cot: any) => {
-    // No permitir eliminar cotizaciones que ya fueron seleccionadas
     if (cot.estado === 'seleccionada') {
-      // Verificar si tiene OC asociada
-      const { data: ordenes } = await supabase
-      .from('ordenes_compra')
-      .select('id, estado')
-      .eq('cotizacion_id', cot.id);
-
-      if (ordenes && ordenes.length > 0) {
-        for (const orden of ordenes) {
-          // Verificar si la OC tiene entradas
-          const { data: entradas } = await supabase
-          .from('entradas_almacen')
-          .select('id')
-          .eq('orden_compra_id', orden.id)
-          .limit(1);
-
-          if (entradas && entradas.length > 0) {
-            alert(
-              'No se puede eliminar esta cotización.\n\n' +
-              'La Orden de Compra asociada ya tiene material recibido en almacén.\n' +
-              'Primero debe gestionar las devoluciones o ajustes correspondientes.'
-            );
-            return;
-          }
-        }
-      }
-
-      alert('No se puede eliminar una cotización que ya ha sido seleccionada y tiene una Orden de Compra asociada.');
+      alert('No se puede eliminar una cotización que ya ha sido seleccionada.');
       return;
     }
 
@@ -389,18 +325,14 @@ export default function CotizacionesPage() {
 
     try {
       await supabase.from('cotizaciones').delete().eq('id', cot.id);
-
       alert('Cotización eliminada correctamente');
 
       if (selectedSolicitud) {
         const cotis = await cargarCotizaciones(selectedSolicitud.id);
         setCotizaciones(cotis);
       }
-
       cargarSolicitudes();
-
     } catch (error) {
-      console.error(error);
       alert('Error al eliminar la cotización');
     }
   };
@@ -411,53 +343,43 @@ export default function CotizacionesPage() {
       return;
     }
 
-    // Validación de cantidad total seleccionada
     const { data: solicitud } = await supabase
-    .from('solicitudes')
-    .select('cantidad')
-    .eq('id', cotizacion.solicitud_id)
-    .single();
+      .from('solicitudes')
+      .select('cantidad')
+      .eq('id', cotizacion.solicitud_id)
+      .single();
 
     const { data: cotizacionesSeleccionadas } = await supabase
-    .from('cotizaciones')
-    .select('cantidad')
-    .eq('solicitud_id', cotizacion.solicitud_id)
-    .eq('estado', 'seleccionada');
+      .from('cotizaciones')
+      .select('cantidad')
+      .eq('solicitud_id', cotizacion.solicitud_id)
+      .eq('estado', 'seleccionada');
 
     const cantidadYaSeleccionada = cotizacionesSeleccionadas?.reduce((sum, c) => sum + Number(c.cantidad || 0), 0) || 0;
     const cantidadNueva = Number(cotizacion.cantidad || 0);
     const totalSeleccionado = cantidadYaSeleccionada + cantidadNueva;
 
-    if (totalSeleccionado > solicitud?.cantidad) {
-      alert(`La cantidad total seleccionada (${totalSeleccionado}) excede la cantidad solicitada (${solicitud?.cantidad}).`);
+    if (totalSeleccionado > (solicitud?.cantidad || 0)) {
+      alert(`La cantidad total seleccionada excede la cantidad solicitada.`);
       return;
     }
 
-    if (!confirm(`¿Seleccionar cotización de ${cotizacion.proveedor} y crear la Orden de Compra automáticamente?`)) {
-      return;
-    }
+    if (!confirm(`¿Seleccionar cotización de ${cotizacion.proveedor} y crear la Orden de Compra?`)) return;
 
     try {
-      // Marcar como seleccionada
-      await supabase
-      .from('cotizaciones')
-      .update({ estado: 'seleccionada' })
-      .eq('id', cotizacion.id);
+      await supabase.from('cotizaciones').update({ estado: 'seleccionada' }).eq('id', cotizacion.id);
 
-      // Crear la OC
       const { data: solicitudData } = await supabase
-      .from('solicitudes')
-      .select('cantidad, unidad, insumo, obras(nombre)')
-      .eq('id', cotizacion.solicitud_id)
-      .single();
+        .from('solicitudes')
+        .select('cantidad, unidad, insumo, obras(nombre)')
+        .eq('id', cotizacion.solicitud_id)
+        .single();
 
       const cantidadUsada = Number(cotizacion.cantidad || solicitudData?.cantidad || 0);
       const total = Number(cotizacion.precio_unitario) * cantidadUsada;
-
-      // Genera Numero de Orden
       const numeroOC = await generarNumeroOC();
 
-      const { error: ocError } = await supabase.from('ordenes_compra').insert({
+      await supabase.from('ordenes_compra').insert({
         solicitud_id: cotizacion.solicitud_id,
         numero_oc: numeroOC,
         proveedor: cotizacion.proveedor,
@@ -469,26 +391,19 @@ export default function CotizacionesPage() {
         observaciones: `Creada automáticamente desde cotización #${cotizacion.id}`,
       });
 
-      if (ocError) throw ocError;
+      alert(`¡Éxito! Orden de Compra creada: ${numeroOC}`);
 
-      alert(`¡Éxito!\nOrden de Compra creada: ${numeroOC}\nProveedor: ${cotizacion.proveedor}`);
-
-      // Actualización inmediata del UI
       setCotizaciones(prev => prev.map(c =>
-      c.id === cotizacion.id
-      ? { ...c, estado: 'seleccionada' }
-      : c
+        c.id === cotizacion.id ? { ...c, estado: 'seleccionada' } : c
       ));
 
       cargarSolicitudes();
-
     } catch (error: any) {
-      console.error(error);
-      alert('Error al crear la Orden de Compra:\n' + (error.message || error));
+      alert('Error al crear la Orden de Compra: ' + (error.message || error));
     }
   };
 
-  // === Cálculo de resumen ===
+  // Resumen
   const resumen = cotizaciones.length > 0 ? {
     cantidad: cotizaciones.length,
     precioMinimo: Math.min(...cotizaciones.map(c => c.precio_unitario)),
@@ -498,467 +413,334 @@ export default function CotizacionesPage() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
-    {/* Encabezado */}
-    <div className="mb-8 flex items-center justify-between">
-    <Link href="/compras" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
+      {/* Encabezado con links alineados */}
+<div className="mb-2 flex items-center justify-between">
+  {/* Link Izquierdo */}
+  <Link 
+    href="/compras" 
+    className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium"
+  >
     ← Volver a Compras
-    </Link>
+  </Link>
 
-    <h1 className="text-3xl font-bold text-gray-900">Cotizaciones</h1>
+  {/* Link Derecho */}
+  <Link 
+    href="/compras/solicitudes" 
+    className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium"
+  >
+    Ir a Solicitudes →
+  </Link>
+</div>
 
-    <Link href="/compras/oc" className="inline-flex items-center text-blue-600 hover:text-blue-800 font-medium">
-    Ir a Órdenes de Compra →
-    </Link>
-    </div>
+{/* Título centrado */}
+<PageHeader
+  title="Cotizaciones"
+  centerTitle={true}
+/>
 
-    {loading ? (
-      <p className="text-center py-10">Cargando...</p>
-    ) : (
-      <>
-      {/* Filtros */}
-      <div className="bg-white rounded-2xl shadow p-6 mb-6">
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-      <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Obra</label>
-      <select
-      value={selectedObraId || ''}
-      onChange={(e) => setSelectedObraId(e.target.value || null)}
-      className="w-full border rounded-xl p-3"
-      >
-      <option value="">Todas las obras</option>
-      {obras.map((obra) => (
-        <option key={obra.id} value={obra.id}>{obra.nombre}</option>
-      ))}
-      </select>
-      </div>
-
-      <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
-      <select
-      value={estadoFiltro}
-      onChange={(e) => setEstadoFiltro(e.target.value)}
-      className="w-full border rounded-xl p-3"
-      >
-      <option value="todas">Todos</option>
-      <option value="pendiente">Pendiente</option>
-      <option value="cotizada">Cotizada</option>
-      <option value="seleccionada">Seleccionada</option>
-      </select>
-      </div>
-
-      <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Desde</label>
-      <input
-      type="date"
-      value={fechaInicio}
-      onChange={(e) => setFechaInicio(e.target.value)}
-      className="w-full border rounded-xl p-3"
-      />
-      </div>
-
-      <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Hasta</label>
-      <input
-      type="date"
-      value={fechaFin}
-      onChange={(e) => setFechaFin(e.target.value)}
-      className="w-full border rounded-xl p-3"
-      />
-      </div>
-      </div>
-
-      {/* Segunda fila */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
-      <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Insumo</label>
-      <input
-      type="text"
-      placeholder="Buscar por insumo..."
-      value={searchInput}
-      onChange={(e) => setSearchInput(e.target.value)}
-      className="w-full border rounded-xl p-3"
-      />
-      </div>
-
-      <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">Buscar por Solicitante</label>
-      <input
-      type="text"
-      placeholder="Buscar por quien solicitó..."
-      value={solicitanteFiltro}
-      onChange={(e) => setSolicitanteFiltro(e.target.value)}
-      className="w-full border rounded-xl p-3"
-      />
-      </div>
-
-      <div className="flex items-end">
-      <button
-      onClick={() => {
-        setSelectedObraId(null);
-        setSearchInput('');
-        setSearchTerm('');
-        setSolicitanteFiltro('');
-        setFechaInicio('');
-        setFechaFin('');
-      }}
-      className="w-full px-6 py-3 text-sm border rounded-xl hover:bg-gray-100"
-      >
-      Limpiar Filtros
-      </button>
-      </div>
-      </div>
-      </div>
-
-      {/* Contenido principal en dos columnas */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      {/* Lista de solicitudes */}
-      <div className="bg-white rounded-2xl shadow overflow-hidden">
-      <div className="p-4 border-b bg-gray-50">
-      <h2 className="font-semibold">Solicitudes para cotizar</h2>
-      </div>
-
-      <div className="divide-y max-h-[580px] overflow-auto">
-      {solicitudes.length === 0 ? (
-        <p className="p-6 text-center text-gray-500">No se encontraron solicitudes.</p>
-      ) : (
-        solicitudes.map((sol) => (
-          <div
-          key={sol.id}
-          onClick={() => abrirSolicitud(sol)}
-          className={`p-4 cursor-pointer hover:bg-gray-50 flex justify-between items-center ${selectedSolicitud?.id === sol.id ? 'bg-blue-50 border-l-4 border-blue-600' : ''}`}
-          >
-          <div>
-          <p className="font-medium">{sol.insumo}</p>
-          <p className="text-sm text-gray-500">{sol.obras?.nombre}</p>
-          </div>
-          <div className="text-right">
-          <p className="text-sm">{sol.cantidad} {sol.unidad}</p>
-          <div className="flex justify-end gap-2 mt-1">
-          <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">{sol.estado}</span>
-          {cotizacionesCount[sol.id] > 0 && (
-            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700">
-            {cotizacionesCount[sol.id]} cotiz.
-            </span>
-          )}
-          </div>
-          </div>
-          </div>
-        ))
-      )}
-      </div>
-      </div>
-
-      {/* Panel de cotizaciones */}
-      <div className="bg-white rounded-2xl shadow flex flex-col">
-      {!selectedSolicitud ? (
-        <div className="flex-1 flex items-center justify-center text-gray-500 p-8 text-center">
-        Selecciona una solicitud para ver o agregar cotizaciones
+      {loading ? (
+        <div className="flex justify-center py-20">
+          <Loading size="lg" text="Cargando cotizaciones..." />
         </div>
       ) : (
         <>
-        <div className="p-4 border-b bg-gray-50">
-        <div className="flex justify-between items-start mb-3">
-        {/* Panel de la derecha  */}
-        <div>
-        <h2 className="font-semibold text-lg">{selectedSolicitud.insumo}</h2>
-        <p className="text-base text-gray-600 font-medium">{selectedSolicitud.obras?.nombre}</p>
-        </div>
-        <button
-        onClick={() => {
-          setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
-          setShowAddModal(true);
-        }}
-        className="inline-flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 active:bg-green-800 text-white px-5 py-2.5 rounded-xl text-sm font-semibold shadow-sm transition-all"
-        >
-        <span className="text-lg leading-none">+</span>
-        Agregar Cotización
-        </button>
-        </div>
+{/* Filtros - Cotizaciones */}
+<Card className="mb-6">
+  {/* Fila 1 */}
+  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-4 items-end">
+    
+    {/* Obra */}
+    <div className="lg:col-span-3">
+      <SelectFilter
+        label="Obra"
+        value={selectedObraId || ''}
+        onChange={(val) => setSelectedObraId(val || null)}
+        placeholder="Todas las obras"
+        options={obras.map(o => ({ value: o.id, label: o.nombre }))}
+      />
+    </div>
 
-        {/* Resumen de cantidades */}
-        {resumen && cotizaciones.length > 0 && (
-          <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-          {/* Cotizaciones */}
-          <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
-          <div className="text-xl">📋</div>
-          <div>
-          <p className="text-xs text-gray-500">Cotizaciones</p>
-          <p className="text-2xl font-bold text-gray-900 leading-none">{resumen.cantidad}</p>
-          </div>
-          </div>
+    {/* Estado */}
+    <div className="lg:col-span-2">
+      <SelectFilter
+        label="Estado"
+        value={estadoFiltro}
+        onChange={setEstadoFiltro}
+        placeholder="Todos"
+        options={[
+          { value: 'pendiente', label: 'Pendiente' },
+          { value: 'cotizada', label: 'Cotizada' },
+          { value: 'seleccionada', label: 'Seleccionada' },
+        ]}
+      />
+    </div>
 
-          {/* Precio más bajo */}
-          <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
-          <div className="text-xl">⬇️</div>
-          <div>
-          <p className="text-xs text-gray-500">Precio más bajo</p>
-          <p className="text-xl font-bold text-green-600 leading-none">
-          ${resumen.precioMinimo.toLocaleString('es-CO')}
-          </p>
-          </div>
-          </div>
+    {/* Rango de Fechas */}
+    <div className="lg:col-span-4">
+      <label className="block text-sm font-medium text-gray-700 mb-1">Rango de Fechas</label>
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          type="date"
+          value={fechaInicio}
+          onChange={(e) => setFechaInicio(e.target.value)}
+          className="w-full border rounded-xl p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <input
+          type="date"
+          value={fechaFin}
+          onChange={(e) => setFechaFin(e.target.value)}
+          className="w-full border rounded-xl p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+    </div>
 
-          {/* Promedio */}
-          <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
-          <div className="text-xl">📊</div>
-          <div>
-          <p className="text-xs text-gray-500">Promedio</p>
-          <p className="text-xl font-bold text-blue-600 leading-none">
-          ${resumen.precioPromedio.toFixed(0).toLocaleString('es-CO')}
-          </p>
-          </div>
-          </div>
+    <div className="lg:col-span-3"></div>
+  </div>
 
-          {/* Precio más alto */}
-          <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
-          <div className="text-xl">⬆️</div>
-          <div>
-          <p className="text-xs text-gray-500">Precio más alto</p>
-          <p className="text-xl font-bold text-red-600 leading-none">
-          ${resumen.precioMaximo.toLocaleString('es-CO')}
-          </p>
-          </div>
-          </div>
-          </div>
-        )}
-        </div>
+  {/* Fila 2: Búsquedas más amplias + Limpiar Filtros */}
+<div className="grid grid-cols-1 md:grid-cols-7 gap-4 mt-5">
+  
+  {/* Buscar por Insumo - más ancho */}
+  <div className="md:col-span-2">
+    <SearchInput
+      value={searchInput}
+      onChange={setSearchInput}
+      placeholder="Buscar por insumo..."
+    />
+  </div>
 
-        <div className="p-4 flex-1 overflow-auto">
-        {cotizaciones.length === 0 ? (
-          <p className="text-center py-10 text-gray-500">Aún no hay cotizaciones para esta solicitud.</p>
-        ) : (
-          <div className="space-y-3">
-          {cotizaciones.map((cot) => {
-            const isSelected = cot.estado === 'seleccionada';
-            const total = cot.precio_unitario * cot.cantidad;
+  {/* Buscar por Solicitante - más ancho */}
+  <div className="md:col-span-2">
+    <SearchInput
+      value={solicitanteFiltro}
+      onChange={setSolicitanteFiltro}
+      placeholder="Buscar por solicitante..."
+    />
+  </div>
 
-            return (
-              <div
-              key={cot.id}
-              className={`border rounded-2xl p-5 transition-all ${
-                isSelected
-                ? 'border-green-600 bg-green-50 shadow-md'
-                : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
-              }`}
-              >
-              <div className="flex justify-between items-start">
-              <div>
-              <p className="font-semibold text-lg text-gray-900">{cot.proveedor}</p>
-              <p className="text-sm text-gray-600 mt-0.5">
-              ${cot.precio_unitario.toLocaleString('es-CO')} × {cot.cantidad} {cot.unidad}
-              </p>
-              {cot.tiempo_entrega_dias && (
-                <p className="text-xs text-gray-500 mt-1">
-                ⏱ Entrega en {cot.tiempo_entrega_dias} días
-                </p>
-              )}
-              {cot.creado_por && (
-                <p className="text-xs text-gray-500 mt-1">Creado por: {cot.creado_por}</p>
-              )}
+  {/* Limpiar Filtros */}
+  <div className="md:col-span-1 flex justify-end items-end">
+    <ActionButton variant="secondary" onClick={limpiarFiltros}>
+      Limpiar Filtros
+    </ActionButton>
+  </div>
+</div>
+</Card>
+
+          {/* Contenido principal */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Lista de Solicitudes */}
+            <Card padding="none" className="overflow-hidden">
+              <div className="p-4 border-b bg-gray-50">
+                <h2 className="font-semibold">Solicitudes para cotizar</h2>
               </div>
 
-              <div className="text-right">
-              <p className="text-2xl font-bold text-gray-900">
-              ${total.toLocaleString('es-CO')}
-              </p>
-              {isSelected && (
-                <span className="inline-block mt-1 px-2.5 py-0.5 text-xs font-medium bg-green-600 text-white rounded-full">
-                Seleccionada
-                </span>
-              )}
+              <div className="divide-y max-h-[620px] overflow-auto">
+                {solicitudes.length === 0 ? (
+                  <EmptyState
+                    icon={<span className="text-4xl">📋</span>}
+                    title="No hay solicitudes"
+                    description="No se encontraron solicitudes pendientes de cotizar."
+                  />
+                ) : (
+                  solicitudes.map((sol) => (
+                    <div
+                      key={sol.id}
+                      onClick={() => abrirSolicitud(sol)}
+                      className={`p-4 cursor-pointer hover:bg-gray-50 flex justify-between items-center ${selectedSolicitud?.id === sol.id ? 'bg-blue-50 border-l-4 border-blue-600' : ''}`}
+                    >
+                      <div>
+                        <p className="font-medium">{sol.insumo}</p>
+                        <p className="text-sm text-gray-500">{sol.obras?.nombre}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm">{sol.cantidad} {sol.unidad}</p>
+                        {cotizacionesCount[sol.id] > 0 && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-700 mt-1 inline-block">
+                            {cotizacionesCount[sol.id]} cotiz.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-              </div>
+            </Card>
 
-              {/* Botones */}
-              <div className="flex gap-2 mt-4 justify-end">
-              {!isSelected && (
-                <button
-                onClick={() => seleccionarCotizacion(cot)}
-                className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-medium transition-colors"
-                >
-                Seleccionar
-                </button>
-              )}
-
-
-
-              {/* Botón Editar - Versión más segura */}
-              {(() => {
-                const ocEstado = Array.isArray(cot.ordenes_compra)
-                ? cot.ordenes_compra[0]?.estado
-                : cot.ordenes_compra?.estado;
-
-                const tieneOCAvanzada = cot.estado === 'seleccionada' &&
-                ocEstado && (ocEstado === 'enviada' || ocEstado === 'recibida');
-
-                return !tieneOCAvanzada && (
-                  <button
-                  onClick={() => abrirEditar(cot)}
-                  className="px-3 py-1.5 text-sm border border-gray-300 hover:bg-gray-100 rounded-xl"
-                  >
-                  Editar
-                  </button>
-                );
-              })()}
-              </div>
-
-              {cot.observaciones && (
-                <div className="mt-3 pt-3 border-t text-sm text-gray-600">
-                {cot.observaciones}
+            {/* Panel de Cotizaciones */}
+            <Card className="flex flex-col min-h-[620px]">
+              {!selectedSolicitud ? (
+                <div className="flex-1 flex items-center justify-center text-gray-500 p-8 text-center">
+                  Selecciona una solicitud para ver o agregar cotizaciones
                 </div>
+              ) : (
+                <>
+                  <div className="p-4 border-b bg-gray-50">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <h2 className="font-semibold text-lg">{selectedSolicitud.insumo}</h2>
+                        <p className="text-base text-gray-600 font-medium">{selectedSolicitud.obras?.nombre}</p>
+                      </div>
+                      <ActionButton onClick={() => {
+                        setNuevaCotizacion({ proveedor: '', precio_unitario: '', cantidad: '', tiempo_entrega_dias: '', observaciones: '', creado_por: '' });
+                        setShowAddModal(true);
+                      }}>
+                        + Agregar Cotización
+                      </ActionButton>
+                    </div>
+
+                    {resumen && cotizaciones.length > 0 && (
+                      <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="bg-white border rounded-xl p-3">
+                          <p className="text-xs text-gray-500">Cotizaciones</p>
+                          <p className="text-2xl font-bold">{resumen.cantidad}</p>
+                        </div>
+                        <div className="bg-white border rounded-xl p-3">
+                          <p className="text-xs text-gray-500">Precio más bajo</p>
+                          <p className="text-xl font-bold text-green-600">${resumen.precioMinimo.toLocaleString('es-CO')}</p>
+                        </div>
+                        <div className="bg-white border rounded-xl p-3">
+                          <p className="text-xs text-gray-500">Promedio</p>
+                          <p className="text-xl font-bold text-blue-600">${resumen.precioPromedio.toFixed(0)}</p>
+                        </div>
+                        <div className="bg-white border rounded-xl p-3">
+                          <p className="text-xs text-gray-500">Precio más alto</p>
+                          <p className="text-xl font-bold text-red-600">${resumen.precioMaximo.toLocaleString('es-CO')}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="p-4 flex-1 overflow-auto">
+                    {cotizaciones.length === 0 ? (
+                      <p className="text-center py-10 text-gray-500">Aún no hay cotizaciones para esta solicitud.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {cotizaciones.map((cot) => {
+                          const isSelected = cot.estado === 'seleccionada';
+                          const total = cot.precio_unitario * cot.cantidad;
+
+                          return (
+                            <div key={cot.id} className={`border rounded-2xl p-5 ${isSelected ? 'border-green-600 bg-green-50' : 'border-gray-200'}`}>
+                              <div className="flex justify-between">
+                                <div>
+                                  <p className="font-semibold text-lg">{cot.proveedor}</p>
+                                  <p className="text-sm text-gray-600">
+                                    ${cot.precio_unitario.toLocaleString('es-CO')} × {cot.cantidad} {cot.unidad}
+                                  </p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-2xl font-bold">${total.toLocaleString('es-CO')}</p>
+                                  {isSelected && <span className="text-xs bg-green-600 text-white px-2 py-0.5 rounded-full">Seleccionada</span>}
+                                </div>
+                              </div>
+
+                              <div className="flex gap-2 mt-4 justify-end">
+                                {!isSelected && (
+                                  <ActionButton onClick={() => seleccionarCotizacion(cot)} size="sm">
+                                    Seleccionar
+                                  </ActionButton>
+                                )}
+                                <ActionButton variant="secondary" size="sm" onClick={() => abrirEditar(cot)}>
+                                  Editar
+                                </ActionButton>
+                                <ActionButton variant="danger" size="sm" onClick={() => eliminarCotizacion(cot)}>
+                                  Eliminar
+                                </ActionButton>
+                              </div>
+
+                              {cot.observaciones && (
+                                <div className="mt-3 pt-3 border-t text-sm text-gray-600">{cot.observaciones}</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
               )}
-              </div>
-            );
-          })}
+            </Card>
           </div>
-        )}
-        </div>
         </>
       )}
-      </div>
-     </div>
-     </>
-    )}
 
-    {/* Modal Agregar Cotización */}
-    {showAddModal && selectedSolicitud && (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl p-8 w-full max-w-md">
-      <h2 className="text-2xl font-bold mb-1">Nueva Cotización</h2>
-      <p className="text-sm text-gray-500 mb-6">
-      Para: <span className="font-medium text-gray-700">{selectedSolicitud?.insumo}</span>
-      </p>
-      <div className="space-y-4">
-      <div>
-      <label className="block text-sm font-semibold mb-1">Proveedor *</label>
-      <input type="text" value={nuevaCotizacion.proveedor} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, proveedor: e.target.value })} className="w-full border rounded-xl p-2.5" />
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Precio unitario (COP) *</label>
-      <input
-      type="number"
-      step="0.01"
-      min="0.01"
-      value={nuevaCotizacion.precio_unitario}
-      onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, precio_unitario: e.target.value })}
-      className="w-full border rounded-xl p-2.5"
-      placeholder="0.00"
-      />
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Cantidad a cotizar</label>
-      <input
-      type="number"
-      min="1"
-      step="1"
-      value={nuevaCotizacion.cantidad}
-      onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, cantidad: e.target.value })}
-      className="w-full border rounded-xl p-2.5"
-      />
-      <p className="text-xs text-gray-500 mt-1">
-      Restante por cotizar: {
-        selectedSolicitud.cantidad -
-        cotizaciones
-        .filter(c => c.estado === 'seleccionada')
-        .reduce((sum, c) => sum + Number(c.cantidad || 0), 0)
-      } {selectedSolicitud.unidad}
-      </p>
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Tiempo de entrega (días)</label>
-      <input
-      type="number"
-      min="1"
-      step="1"
-      value={nuevaCotizacion.tiempo_entrega_dias} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, tiempo_entrega_dias: e.target.value })} className="w-full border rounded-xl p-2.5" />
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Creado por</label>
-      <input type="text" value={nuevaCotizacion.creado_por} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, creado_por: e.target.value })} className="w-full border rounded-xl p-2.5" placeholder="Nombre de quien cotiza" />
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Observaciones</label>
-      <textarea value={nuevaCotizacion.observaciones} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, observaciones: e.target.value })} className="w-full border rounded-xl p-2.5 h-20" />
-      </div>
-      </div>
-      <div className="flex gap-3 mt-8">
-      <button onClick={() => setShowAddModal(false)} className="flex-1 py-3 rounded-xl border">Cancelar</button>
-      <button onClick={agregarCotizacion} className="flex-1 py-3 rounded-xl bg-green-600 text-white font-medium">Guardar Cotización</button>
-      </div>
-      </div>
-      </div>
-    )}
+      {/* Modal Agregar Cotización */}
+      <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Nueva Cotización" maxWidth="md">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold mb-1">Proveedor *</label>
+            <input type="text" value={nuevaCotizacion.proveedor} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, proveedor: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Precio unitario *</label>
+            <input type="number" step="0.01" value={nuevaCotizacion.precio_unitario} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, precio_unitario: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Cantidad</label>
+            <input type="number" value={nuevaCotizacion.cantidad} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, cantidad: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+             Restante por cotizar: {
+             selectedSolicitud 
+             ? selectedSolicitud.cantidad - cotizaciones
+               .filter(c => c.estado === 'seleccionada')
+               .reduce((sum, c) => sum + Number(c.cantidad || 0), 0)
+             : 0
+             } {selectedSolicitud?.unidad}
+          </p>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Tiempo de entrega (días)</label>
+            <input type="number" value={nuevaCotizacion.tiempo_entrega_dias} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, tiempo_entrega_dias: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Creado por</label>
+            <input type="text" value={nuevaCotizacion.creado_por} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, creado_por: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Observaciones</label>
+            <textarea value={nuevaCotizacion.observaciones} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, observaciones: e.target.value })} className="w-full border rounded-xl p-2.5 h-20" />
+          </div>
+        </div>
+        <div className="flex gap-3 mt-8">
+          <ActionButton variant="secondary" onClick={() => setShowAddModal(false)} className="flex-1">Cancelar</ActionButton>
+          <ActionButton onClick={agregarCotizacion} className="flex-1">Guardar Cotización</ActionButton>
+        </div>
+      </Modal>
 
-    {/* Modal Editar Cotización */}
-    {showEditModal && editingCotizacion && (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl p-8 w-full max-w-md">
-      <h2 className="text-2xl font-bold mb-1">Editar Cotización</h2>
-      <p className="text-sm text-gray-500 mb-6">
-      Para: <span className="font-medium text-gray-700">{selectedSolicitud?.insumo}</span>
-      </p>
-      <div className="space-y-4">
-      <div>
-      <label className="block text-sm font-semibold mb-1">Proveedor</label>
-      <input type="text" value={nuevaCotizacion.proveedor} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, proveedor: e.target.value })} className="w-full border rounded-xl p-2.5" />
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Precio unitario</label>
-      <input type="number"
-      min="0.1"
-      step="0.1"
-      value={nuevaCotizacion.precio_unitario} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, precio_unitario: e.target.value })} className="w-full border rounded-xl p-2.5" />
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Cantidad a cotizar</label>
-      <input
-      type="number"
-      min="1"
-      step="1"
-      value={nuevaCotizacion.cantidad}
-      onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, cantidad: e.target.value })}
-      className="w-full border rounded-xl p-2.5"
-      />
-      <p className="text-xs text-gray-500 mt-1">
-      Restante por cotizar: {
-        selectedSolicitud.cantidad -
-        cotizaciones
-        .filter(c => c.estado === 'seleccionada')
-        .reduce((sum, c) => sum + Number(c.cantidad || 0), 0)
-      } {selectedSolicitud.unidad}
-      </p>
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Tiempo de entrega (días)</label>
-      <input
-      type="number"
-      min="1"
-      step="1"
-      value={nuevaCotizacion.tiempo_entrega_dias} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, tiempo_entrega_dias: e.target.value })} className="w-full border rounded-xl p-2.5" />
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Creado por</label>
-      <input type="text" value={nuevaCotizacion.creado_por} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, creado_por: e.target.value })} className="w-full border rounded-xl p-2.5" />
-      </div>
-      <div>
-      <label className="block text-sm font-semibold mb-1">Observaciones</label>
-      <textarea value={nuevaCotizacion.observaciones} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, observaciones: e.target.value })} className="w-full border rounded-xl p-2.5 h-20" />
-      </div>
-      </div>
-      <div className="flex gap-3 mt-8">
-      <button
-      onClick={() => { setShowEditModal(false); setEditingCotizacion(null); }}
-      className="flex-1 py-3 rounded-xl border"
-      >
-      Cancelar
-      </button>
-      <button onClick={guardarEdicion} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-medium">
-      Guardar Cambios
-      </button>
-      </div>
-      </div>
-      </div>
-    )}
+      {/* Modal Editar Cotización */}
+      <Modal isOpen={showEditModal} onClose={() => setShowEditModal(false)} title="Editar Cotización" maxWidth="md">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-semibold mb-1">Proveedor</label>
+            <input type="text" value={nuevaCotizacion.proveedor} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, proveedor: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Precio unitario</label>
+            <input type="number" value={nuevaCotizacion.precio_unitario} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, precio_unitario: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Cantidad</label>
+            <input type="number" value={nuevaCotizacion.cantidad} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, cantidad: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Tiempo de entrega (días)</label>
+            <input type="number" value={nuevaCotizacion.tiempo_entrega_dias} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, tiempo_entrega_dias: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Creado por</label>
+            <input type="text" value={nuevaCotizacion.creado_por} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, creado_por: e.target.value })} className="w-full border rounded-xl p-2.5" />
+          </div>
+          <div>
+            <label className="block text-sm font-semibold mb-1">Observaciones</label>
+            <textarea value={nuevaCotizacion.observaciones} onChange={(e) => setNuevaCotizacion({ ...nuevaCotizacion, observaciones: e.target.value })} className="w-full border rounded-xl p-2.5 h-20" />
+          </div>
+        </div>
+        <div className="flex gap-3 mt-8">
+          <ActionButton variant="secondary" onClick={() => setShowEditModal(false)} className="flex-1">Cancelar</ActionButton>
+          <ActionButton onClick={guardarEdicion} className="flex-1">Guardar Cambios</ActionButton>
+        </div>
+      </Modal>
     </div>
   );
 }
