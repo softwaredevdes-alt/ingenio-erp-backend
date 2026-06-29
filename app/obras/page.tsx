@@ -184,25 +184,165 @@ export default function ObrasPage() {
   };
 
   const cambiarEstadoObra = async (id: string, nuevoEstado: string) => {
+  // Si el nuevo estado es "finalizada" o "cancelada", hacemos validación estricta
+  if (nuevoEstado === 'finalizada' || nuevoEstado === 'cancelada') {
     try {
-      const { error } = await supabase
+      // Verificar actividad de compras
+      const { count: totalSolicitudes } = await supabase
+        .from('solicitudes')
+        .select('*', { count: 'exact', head: true })
+        .eq('obra_id', id);
+
+      const { data: ordenesData } = await supabase
+        .from('ordenes_compra')
+        .select(`id, solicitudes!inner(obra_id)`)
+        .eq('solicitudes.obra_id', id);
+      const totalOrdenes = ordenesData?.length || 0;
+
+      const { data: entradasData } = await supabase
+        .from('entradas_almacen')
+        .select(`
+          id,
+          ordenes_compra!inner(
+            solicitudes!inner(obra_id)
+          )
+        `)
+        .eq('ordenes_compra.solicitudes.obra_id', id);
+      const totalEntradas = entradasData?.length || 0;
+
+      const { count: totalInventario } = await supabase
+        .from('inventario')
+        .select('*', { count: 'exact', head: true })
+        .eq('obra_id', id);
+
+      const tieneActividad = 
+        (totalSolicitudes || 0) > 0 || 
+        totalOrdenes > 0 || 
+        totalEntradas > 0 || 
+        (totalInventario || 0) > 0;
+
+      if (tieneActividad) {
+        const accion = nuevoEstado === 'finalizada' ? 'finalizar' : 'cancelar';
+
+        alert(
+          `⚠️ No es posible ${accion} la obra.\n\n` +
+          `La obra tiene actividad registrada en Compras:\n\n` +
+          `• ${totalSolicitudes || 0} Solicitud(es)\n` +
+          `• ${totalOrdenes} Orden(es) de Compra\n` +
+          `• ${totalEntradas} Entrada(s) de almacén\n` +
+          `• ${totalInventario || 0} Registro(s) en inventario\n\n` +
+          `Antes de ${accion} la obra debes cerrar o reasignar todas las compras e insumos asociados.`
+        );
+
+        // No actualizamos el estado visualmente
+        return;
+      }
+    } catch (error) {
+      console.error('Error verificando actividad de la obra:', error);
+      alert('Ocurrió un error al verificar la actividad de la obra.');
+      return;
+    }
+  }
+
+  // === Si pasó la validación o el estado no requiere restricción ===
+  try {
+    const { error } = await supabase
       .from('obras')
       .update({ estado: nuevoEstado })
       .eq('id', id);
 
-      if (error) throw error;
+    if (error) throw error;
 
-      // Actualizar la lista localmente
-      setObras(prev =>
+    // Actualizar estado localmente
+    setObras(prev =>
       prev.map(obra =>
-      obra.id === id ? { ...obra, estado: nuevoEstado } : obra
+        obra.id === id ? { ...obra, estado: nuevoEstado } : obra
       )
+    );
+  } catch (error) {
+    console.error(error);
+    alert('Error al cambiar el estado de la obra');
+  }
+};
+
+  const eliminarObra = async (id: string, nombre: string) => {
+  try {
+    // === VERIFICACIONES DE ACTIVIDAD ===
+
+    // 1. Solicitudes
+    const { count: totalSolicitudes } = await supabase
+      .from('solicitudes')
+      .select('*', { count: 'exact', head: true })
+      .eq('obra_id', id);
+
+    // 2. Órdenes de Compra
+    const { data: ordenesData } = await supabase
+      .from('ordenes_compra')
+      .select(`id, solicitudes!inner(obra_id)`)
+      .eq('solicitudes.obra_id', id);
+    const totalOrdenes = ordenesData?.length || 0;
+
+    // 3. Entradas de Almacén (a través de orden de compra)
+    const { data: entradasData } = await supabase
+      .from('entradas_almacen')
+      .select(`
+        id,
+        ordenes_compra!inner(
+          solicitudes!inner(obra_id)
+        )
+      `)
+      .eq('ordenes_compra.solicitudes.obra_id', id);
+    const totalEntradas = entradasData?.length || 0;
+
+    // 4. Inventario
+    const { count: totalInventario } = await supabase
+      .from('inventario')
+      .select('*', { count: 'exact', head: true })
+      .eq('obra_id', id);
+
+    const tieneActividad = 
+      (totalSolicitudes || 0) > 0 || 
+      totalOrdenes > 0 || 
+      totalEntradas > 0 || 
+      (totalInventario || 0) > 0;
+
+    if (tieneActividad) {
+      alert(
+        `⚠️ No es posible eliminar la obra "${nombre}".\n\n` +
+        `Esta obra tiene registros asociados:\n\n` +
+        `• ${totalSolicitudes || 0} Solicitud(es) de material\n` +
+        `• ${totalOrdenes} Orden(es) de Compra\n` +
+        `• ${totalEntradas} Entrada(s) de almacén\n` +
+        `• ${totalInventario || 0} Registro(s) en inventario\n\n` +
+        `Para poder eliminar esta obra primero debes eliminar o reasignar estos registros.`
       );
-    } catch (error) {
-      console.error(error);
-      alert('Error al cambiar el estado de la obra');
+      return;
     }
-  };
+
+    // === CONFIRMACIÓN ===
+    const confirmar = confirm(
+      `¿Estás seguro de que deseas eliminar la obra "${nombre}"?\n\n` +
+      `Esta acción es irreversible.`
+    );
+
+    if (!confirmar) return;
+
+    // === ELIMINAR ===
+    const { error } = await supabase
+      .from('obras')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+
+    alert('Obra eliminada correctamente.');
+    fetchObras();
+
+  } catch (error: any) {
+    console.error('Error al eliminar obra:', error);
+    alert('Ocurrió un error al intentar eliminar la obra.');
+  }
+};
 
   return (
     <div className="p-8 max-w-7xl mx-auto">
@@ -313,24 +453,33 @@ export default function ObrasPage() {
           </td>
 
           {/* Acciones - Botones un poco más grandes */}
-          <td className="px-4 py-4 text-center min-w-[160px]">
-          <div className="flex items-center justify-center gap-2 whitespace-nowrap">
-          {/* Editar - con fondo tenue amarillo */}
-          <button
-          onClick={() => openModal(obra)}
-          className="px-3 py-1.5 text-sm bg-amber-100 hover:bg-amber-200 text-amber-700 border border-amber-200 rounded-lg transition-colors"
-          >
-          Editar
-          </button>
+{/* Acciones */}
+<td className="px-4 py-4 text-center min-w-[200px]">
+  <div className="flex items-center justify-center gap-2 whitespace-nowrap">
+    {/* Editar */}
+    <button
+      onClick={() => openModal(obra)}
+      className="px-3 py-1.5 text-sm bg-amber-100 hover:bg-amber-200 text-amber-700 border border-amber-200 rounded-lg transition-colors"
+    >
+      Editar
+    </button>
 
-          {/* + Solicitud - verde */}
-          <Link href={`/compras/solicitudes?obra_id=${obra.id}`}>
-          <button className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
-          + Solicitud
-          </button>
-          </Link>
-          </div>
-          </td>
+    {/* + Solicitud */}
+    <Link href={`/compras/solicitudes?obra_id=${obra.id}`}>
+      <button className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
+        + Solicitud
+      </button>
+    </Link>
+
+    {/* Eliminar - Solo si no tiene actividad (opcional: siempre mostrar y validar al hacer click) */}
+    <button
+      onClick={() => eliminarObra(obra.id, obra.nombre)}
+      className="px-3 py-1.5 text-sm bg-red-100 hover:bg-red-200 text-red-700 border border-red-200 rounded-lg transition-colors"
+    >
+      Eliminar
+    </button>
+  </div>
+</td>
           </tr>
       ))
     )}
